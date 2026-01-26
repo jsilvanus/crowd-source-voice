@@ -92,6 +92,12 @@ router.post('/:id/upload', authenticate, requireAdmin, upload.single('file'), as
       return res.status(400).json({ error: 'No valid prompts found in the file' });
     }
 
+    // Store source content in database
+    await query(
+      'UPDATE corpora SET source_filename = $1, source_content = $2 WHERE id = $3',
+      [req.file.originalname, content, corpusId]
+    );
+
     // Insert prompts into database
     const insertPromises = prompts.map(text =>
       query(
@@ -102,12 +108,13 @@ router.post('/:id/upload', authenticate, requireAdmin, upload.single('file'), as
 
     await Promise.all(insertPromises);
 
-    // Clean up uploaded file
+    // Clean up uploaded file (content is now in database)
     await fs.unlink(req.file.path);
 
     res.json({
-      message: 'Corpus file processed successfully',
-      promptsCreated: prompts.length
+      message: 'Corpus file processed and stored in database',
+      promptsCreated: prompts.length,
+      sourceFilename: req.file.originalname
     });
   } catch (error) {
     next(error);
@@ -180,6 +187,81 @@ router.get('/:id/skipped', authenticate, requireAdmin, async (req, res, next) =>
     `, [corpusId, threshold]);
 
     res.json(result.rows);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /corpus/:id/source - Get corpus source content (admin only)
+router.get('/:id/source', authenticate, requireAdmin, async (req, res, next) => {
+  try {
+    const corpusId = parseInt(req.params.id);
+
+    const result = await query(
+      'SELECT source_filename, source_content FROM corpora WHERE id = $1',
+      [corpusId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Corpus not found' });
+    }
+
+    const { source_filename, source_content } = result.rows[0];
+
+    if (!source_content) {
+      return res.status(404).json({ error: 'No source content stored for this corpus' });
+    }
+
+    res.json({
+      filename: source_filename,
+      content: source_content
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /corpus/:id/reprocess - Re-process corpus from stored source (admin only)
+router.post('/:id/reprocess', authenticate, requireAdmin, async (req, res, next) => {
+  try {
+    const corpusId = parseInt(req.params.id);
+
+    const corpusResult = await query('SELECT * FROM corpora WHERE id = $1', [corpusId]);
+    if (corpusResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Corpus not found' });
+    }
+
+    const corpus = corpusResult.rows[0];
+
+    if (!corpus.source_content) {
+      return res.status(400).json({ error: 'No source content stored for this corpus' });
+    }
+
+    // Delete existing prompts
+    await query('DELETE FROM prompts WHERE corpus_id = $1', [corpusId]);
+
+    // Re-process the stored content
+    const format = detectFormat(corpus.source_filename || 'corpus.txt', corpus.source_content);
+    const prompts = splitCorpus(corpus.source_content, corpus.type, format);
+
+    if (prompts.length === 0) {
+      return res.status(400).json({ error: 'No valid prompts found in the stored content' });
+    }
+
+    // Insert new prompts
+    const insertPromises = prompts.map(text =>
+      query(
+        'INSERT INTO prompts (corpus_id, type, text) VALUES ($1, $2, $3) RETURNING id',
+        [corpusId, corpus.type, text]
+      )
+    );
+
+    await Promise.all(insertPromises);
+
+    res.json({
+      message: 'Corpus re-processed successfully',
+      promptsCreated: prompts.length
+    });
   } catch (error) {
     next(error);
   }

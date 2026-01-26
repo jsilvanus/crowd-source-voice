@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS corpora (
   language VARCHAR(50) NOT NULL,
   description TEXT,
   type VARCHAR(20) NOT NULL CHECK (type IN ('text', 'music')),
+  source_filename VARCHAR(255),
+  source_content TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
