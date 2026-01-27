@@ -95,6 +95,26 @@ export default function AdminCorpora() {
     }
   };
 
+  const handleDownloadSource = async (id, name) => {
+    try {
+      const response = await api.get(`/corpus/${id}/source`);
+      const { filename, content } = response.data;
+
+      // Create download
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename || `${name}-source.txt`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err.message || 'No source file available for this corpus');
+    }
+  };
+
   const formatDate = (dateString) => {
     return new Date(dateString).toLocaleDateString('en-US', {
       year: 'numeric',
@@ -177,6 +197,13 @@ export default function AdminCorpora() {
                         className="btn btn-outline btn-sm"
                       >
                         Upload
+                      </button>
+                      <button
+                        onClick={() => handleDownloadSource(corpus.id, corpus.name)}
+                        className="btn btn-secondary btn-sm"
+                        title="Download original source file"
+                      >
+                        Source
                       </button>
                       <button
                         onClick={() => handleDeleteCorpus(corpus.id, corpus.name)}

@@ -1,8 +1,10 @@
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ThemeContext';
 
 export default function Header() {
   const { user, isAuthenticated, isAdmin, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
 
   const handleLogout = async () => {
@@ -43,6 +45,15 @@ export default function Header() {
               <NavLink to="/register">Register</NavLink>
             </>
           )}
+
+          <button
+            onClick={toggleTheme}
+            className="btn btn-outline btn-sm"
+            title={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
+            style={{ padding: '0.5rem', minWidth: 'auto' }}
+          >
+            {theme === 'light' ? '🌙' : '☀️'}
+          </button>
         </nav>
       </div>
     </header>
