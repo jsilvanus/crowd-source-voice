@@ -11,6 +11,7 @@ import recordingRoutes from './routes/recording.js';
 import validationRoutes from './routes/validation.js';
 import userRoutes from './routes/user.js';
 import exportRoutes from './routes/export.js';
+import adminRoutes from './routes/admin.js';
 import { getDiskSpaceStatus } from './middleware/diskSpace.js';
 import { authenticate, requireAdmin } from './middleware/auth.js';
 
@@ -41,6 +42,7 @@ app.use('/api/recording', recordingRoutes);
 app.use('/api/validation', validationRoutes);
 app.use('/api/me', userRoutes);
 app.use('/api/export', exportRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

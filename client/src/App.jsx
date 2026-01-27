@@ -10,6 +10,8 @@ import MyRecordings from './pages/MyRecordings';
 import Profile from './pages/Profile';
 import AdminCorpora from './pages/admin/Corpora';
 import AdminExport from './pages/admin/Export';
+import AdminDashboard from './pages/admin/Dashboard';
+import AdminUsers from './pages/admin/Users';
 import PrivacyPolicy from './pages/PrivacyPolicy';
 import TermsOfService from './pages/TermsOfService';
 
@@ -86,9 +88,21 @@ export default function App() {
             </PrivateRoute>
           } />
 
+          <Route path="/admin/dashboard" element={
+            <PrivateRoute adminOnly>
+              <AdminDashboard />
+            </PrivateRoute>
+          } />
+
           <Route path="/admin/corpora" element={
             <PrivateRoute adminOnly>
               <AdminCorpora />
+            </PrivateRoute>
+          } />
+
+          <Route path="/admin/users" element={
+            <PrivateRoute adminOnly>
+              <AdminUsers />
             </PrivateRoute>
           } />
 
