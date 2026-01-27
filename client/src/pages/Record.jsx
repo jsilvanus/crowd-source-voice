@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import api from '../utils/api';
+import AudioRecorder from '../utils/audioRecorder';
 
 export default function Record() {
   const { corpusId } = useParams();
@@ -19,14 +20,23 @@ export default function Record() {
   const [duration, setDuration] = useState(0);
   const [uploading, setUploading] = useState(false);
 
-  const mediaRecorderRef = useRef(null);
-  const chunksRef = useRef([]);
+  const recorderRef = useRef(null);
   const startTimeRef = useRef(null);
+  const timerRef = useRef(null);
   const audioRef = useRef(null);
 
   useEffect(() => {
     loadCorpusAndPrompt();
   }, [corpusId]);
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        cancelAnimationFrame(timerRef.current);
+      }
+    };
+  }, []);
 
   const loadCorpusAndPrompt = async () => {
     setLoading(true);
@@ -62,46 +72,17 @@ export default function Record() {
 
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          sampleRate: 16000,
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true
-        }
-      });
-
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/ogg'
-      });
-
-      mediaRecorderRef.current = mediaRecorder;
-      chunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          chunksRef.current.push(e.data);
-        }
-      };
-
-      mediaRecorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: mediaRecorder.mimeType });
-        setAudioBlob(blob);
-        setAudioUrl(URL.createObjectURL(blob));
-
-        // Stop all tracks
-        stream.getTracks().forEach(track => track.stop());
-      };
+      recorderRef.current = new AudioRecorder();
+      await recorderRef.current.start();
 
       startTimeRef.current = Date.now();
-      mediaRecorder.start(100); // Collect data every 100ms
       setIsRecording(true);
 
       // Update duration display
       const updateDuration = () => {
-        if (mediaRecorderRef.current?.state === 'recording') {
+        if (recorderRef.current?.isRecording) {
           setDuration((Date.now() - startTimeRef.current) / 1000);
-          requestAnimationFrame(updateDuration);
+          timerRef.current = requestAnimationFrame(updateDuration);
         }
       };
       updateDuration();
@@ -112,10 +93,18 @@ export default function Record() {
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current?.state === 'recording') {
-      mediaRecorderRef.current.stop();
+    if (timerRef.current) {
+      cancelAnimationFrame(timerRef.current);
+    }
+
+    if (recorderRef.current?.isRecording) {
+      const { blob, duration: actualDuration, sampleRate } = recorderRef.current.stop();
+      setAudioBlob(blob);
+      setAudioUrl(URL.createObjectURL(blob));
+      setDuration(actualDuration);
       setIsRecording(false);
-      setDuration((Date.now() - startTimeRef.current) / 1000);
+
+      console.log(`Recorded: ${actualDuration.toFixed(2)}s at ${sampleRate}Hz`);
     }
   };
 
@@ -136,7 +125,7 @@ export default function Record() {
 
     try {
       const formData = new FormData();
-      formData.append('audio', audioBlob, 'recording.webm');
+      formData.append('audio', audioBlob, 'recording.wav');
       formData.append('prompt_id', prompt.id);
       formData.append('duration', duration.toFixed(2));
 
@@ -245,7 +234,7 @@ export default function Record() {
                   style={{ width: '100%', marginBottom: '1rem' }}
                 />
                 <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-                  Duration: {formatDuration(duration)}
+                  Duration: {formatDuration(duration)} | Format: WAV 16kHz mono
                 </div>
 
                 <div className="flex flex-center gap-2">
