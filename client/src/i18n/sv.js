@@ -269,11 +269,10 @@ export default {
       auth: 'Autentiseringstoken (för att hålla dig inloggad)',
       language: 'Språkinställning (engelska, finska, svenska)',
       theme: 'Temainställning (ljust/mörkt läge)',
-      consent: 'Detta samtyckesval',
+      consent: 'Denna bekräftelse',
     },
     moreInfo: 'För mer information, se vår',
-    accept: 'Acceptera',
-    decline: 'Avböj',
+    understand: 'Jag förstår',
   },
 
   // Errors

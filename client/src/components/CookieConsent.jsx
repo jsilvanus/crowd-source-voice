@@ -18,19 +18,9 @@ export default function CookieConsent() {
     }
   }, []);
 
-  const handleAccept = () => {
+  const handleAcknowledge = () => {
     localStorage.setItem(CONSENT_KEY, JSON.stringify({
-      accepted: true,
-      timestamp: new Date().toISOString()
-    }));
-    setShowBanner(false);
-  };
-
-  const handleDecline = () => {
-    // Still set a flag so we don't keep showing the banner
-    // but mark as declined
-    localStorage.setItem(CONSENT_KEY, JSON.stringify({
-      accepted: false,
+      acknowledged: true,
       timestamp: new Date().toISOString()
     }));
     setShowBanner(false);
@@ -82,18 +72,12 @@ export default function CookieConsent() {
             </Link>.
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+        <div>
           <button
-            onClick={handleAccept}
+            onClick={handleAcknowledge}
             className="btn btn-primary"
           >
-            {t('cookies.accept')}
-          </button>
-          <button
-            onClick={handleDecline}
-            className="btn btn-outline"
-          >
-            {t('cookies.decline')}
+            {t('cookies.understand')}
           </button>
         </div>
       </div>
@@ -101,13 +85,13 @@ export default function CookieConsent() {
   );
 }
 
-// Helper to check if user has accepted cookies
-export function hasAcceptedCookies() {
+// Helper to check if user has acknowledged the storage notice
+export function hasAcknowledgedStorage() {
   try {
     const consent = localStorage.getItem(CONSENT_KEY);
     if (!consent) return false;
     const parsed = JSON.parse(consent);
-    return parsed.accepted === true;
+    return parsed.acknowledged === true;
   } catch {
     return false;
   }

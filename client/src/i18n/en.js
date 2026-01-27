@@ -269,11 +269,10 @@ export default {
       auth: 'Authentication token (to keep you logged in)',
       language: 'Language preference (English, Finnish, Swedish)',
       theme: 'Theme preference (light/dark mode)',
-      consent: 'This consent choice',
+      consent: 'This notice acknowledgment',
     },
     moreInfo: 'For more details, see our',
-    accept: 'Accept',
-    decline: 'Decline',
+    understand: 'I understand',
   },
 
   // Errors

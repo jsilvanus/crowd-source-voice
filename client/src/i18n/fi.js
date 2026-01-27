@@ -269,11 +269,10 @@ export default {
       auth: 'Todennustunniste (pitää sinut kirjautuneena)',
       language: 'Kieliasetus (englanti, suomi, ruotsi)',
       theme: 'Teema-asetus (vaalea/tumma tila)',
-      consent: 'Tämä suostumusvalinta',
+      consent: 'Tämä ilmoituksen kuittaus',
     },
     moreInfo: 'Lisätietoja löydät',
-    accept: 'Hyväksy',
-    decline: 'Hylkää',
+    understand: 'Ymmärrän',
   },
 
   // Errors
