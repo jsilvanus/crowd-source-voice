@@ -38,6 +38,115 @@ router.get('/recordings', authenticate, async (req, res, next) => {
   }
 });
 
+// POST /me/consent/recording - Give consent for recording
+router.post('/consent/recording', authenticate, async (req, res, next) => {
+  try {
+    const result = await query(
+      'UPDATE users SET recording_consent_at = NOW() WHERE id = $1 RETURNING recording_consent_at',
+      [req.user.id]
+    );
+
+    res.json({
+      message: 'Recording consent given',
+      recordingConsentAt: result.rows[0].recording_consent_at
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// DELETE /me/consent/recording - Withdraw recording consent
+router.delete('/consent/recording', authenticate, async (req, res, next) => {
+  try {
+    await query(
+      'UPDATE users SET recording_consent_at = NULL WHERE id = $1',
+      [req.user.id]
+    );
+
+    res.json({ message: 'Recording consent withdrawn' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /me/export - Export all personal data (GDPR)
+router.get('/export', authenticate, async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+
+    // Get user profile
+    const userResult = await query(
+      'SELECT id, email, role, terms_accepted_at, recording_consent_at, created_at FROM users WHERE id = $1',
+      [userId]
+    );
+    const user = userResult.rows[0];
+
+    // Get user's recordings
+    const recordingsResult = await query(`
+      SELECT
+        r.id, r.file_path, r.duration, r.quality_score, r.created_at,
+        p.text as prompt_text, p.type as prompt_type,
+        c.name as corpus_name, c.language
+      FROM recordings r
+      JOIN prompts p ON r.prompt_id = p.id
+      JOIN corpora c ON p.corpus_id = c.id
+      WHERE r.user_id = $1
+      ORDER BY r.created_at
+    `, [userId]);
+
+    // Get user's validations
+    const validationsResult = await query(`
+      SELECT
+        v.id, v.score, v.created_at,
+        r.id as recording_id, p.text as prompt_text
+      FROM validations v
+      JOIN recordings r ON v.recording_id = r.id
+      JOIN prompts p ON r.prompt_id = p.id
+      WHERE v.validator_id = $1
+      ORDER BY v.created_at
+    `, [userId]);
+
+    const exportData = {
+      exportedAt: new Date().toISOString(),
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        termsAcceptedAt: user.terms_accepted_at,
+        recordingConsentAt: user.recording_consent_at,
+        accountCreatedAt: user.created_at
+      },
+      recordings: recordingsResult.rows.map(r => ({
+        id: r.id,
+        prompt: r.prompt_text,
+        promptType: r.prompt_type,
+        corpus: r.corpus_name,
+        language: r.language,
+        duration: r.duration,
+        qualityScore: r.quality_score,
+        createdAt: r.created_at
+      })),
+      validations: validationsResult.rows.map(v => ({
+        id: v.id,
+        recordingId: v.recording_id,
+        prompt: v.prompt_text,
+        score: v.score,
+        createdAt: v.created_at
+      })),
+      summary: {
+        totalRecordings: recordingsResult.rows.length,
+        totalValidations: validationsResult.rows.length
+      }
+    };
+
+    res.setHeader('Content-Disposition', `attachment; filename="my-data-export-${Date.now()}.json"`);
+    res.setHeader('Content-Type', 'application/json');
+    res.json(exportData);
+  } catch (error) {
+    next(error);
+  }
+});
+
 // GET /me/stats - Get user's statistics
 router.get('/stats', authenticate, async (req, res, next) => {
   try {

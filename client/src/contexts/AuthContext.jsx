@@ -35,10 +35,19 @@ export function AuthProvider({ children }) {
     return response.data;
   };
 
-  const register = async (email, password, consent) => {
-    const response = await api.post('/auth/register', { email, password, consent });
+  const register = async (email, password, acceptTerms) => {
+    const response = await api.post('/auth/register', { email, password, acceptTerms });
     localStorage.setItem('token', response.data.token);
     setUser(response.data.user);
+    return response.data;
+  };
+
+  const giveRecordingConsent = async () => {
+    const response = await api.post('/me/consent/recording');
+    setUser(prev => ({
+      ...prev,
+      recordingConsentAt: response.data.recordingConsentAt
+    }));
     return response.data;
   };
 
@@ -58,8 +67,10 @@ export function AuthProvider({ children }) {
     login,
     register,
     logout,
+    giveRecordingConsent,
     isAuthenticated: !!user,
-    isAdmin: user?.role === 'admin'
+    isAdmin: user?.role === 'admin',
+    hasRecordingConsent: !!user?.recordingConsentAt
   };
 
   return (

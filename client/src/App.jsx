@@ -10,6 +10,8 @@ import MyRecordings from './pages/MyRecordings';
 import Profile from './pages/Profile';
 import AdminCorpora from './pages/admin/Corpora';
 import AdminExport from './pages/admin/Export';
+import PrivacyPolicy from './pages/PrivacyPolicy';
+import TermsOfService from './pages/TermsOfService';
 
 function PrivateRoute({ children, adminOnly = false }) {
   const { user, loading, isAuthenticated, isAdmin } = useAuth();
@@ -51,6 +53,8 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/privacy" element={<PrivacyPolicy />} />
+          <Route path="/terms" element={<TermsOfService />} />
 
           <Route path="/" element={
             <PrivateRoute>

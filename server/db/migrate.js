@@ -7,9 +7,25 @@ CREATE TABLE IF NOT EXISTS users (
   email VARCHAR(255) UNIQUE NOT NULL,
   password_hash VARCHAR(255) NOT NULL,
   role VARCHAR(20) DEFAULT 'user' CHECK (role IN ('user', 'admin')),
-  consent_given BOOLEAN DEFAULT false,
+  terms_accepted_at TIMESTAMP,
+  recording_consent_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Migration: Add consent columns if they don't exist
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='terms_accepted_at') THEN
+    ALTER TABLE users ADD COLUMN terms_accepted_at TIMESTAMP;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='recording_consent_at') THEN
+    ALTER TABLE users ADD COLUMN recording_consent_at TIMESTAMP;
+  END IF;
+  -- Remove old consent_given column if it exists
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='consent_given') THEN
+    ALTER TABLE users DROP COLUMN consent_given;
+  END IF;
+END $$;
 
 -- Corpora table
 CREATE TABLE IF NOT EXISTS corpora (

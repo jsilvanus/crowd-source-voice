@@ -10,7 +10,7 @@ const router = express.Router();
 router.post('/register', [
   body('email').isEmail().normalizeEmail(),
   body('password').isLength({ min: 6 }),
-  body('consent').isBoolean().equals('true')
+  body('acceptTerms').isBoolean().equals('true')
 ], async (req, res, next) => {
   try {
     const errors = validationResult(req);
@@ -18,10 +18,10 @@ router.post('/register', [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { email, password, consent } = req.body;
+    const { email, password, acceptTerms } = req.body;
 
-    if (!consent) {
-      return res.status(400).json({ error: 'Consent is required' });
+    if (!acceptTerms) {
+      return res.status(400).json({ error: 'You must accept the Terms of Service and Privacy Policy' });
     }
 
     // Check if user exists
@@ -33,17 +33,23 @@ router.post('/register', [
     // Hash password
     const passwordHash = await bcrypt.hash(password, 12);
 
-    // Create user
+    // Create user with terms acceptance timestamp
     const result = await query(
-      'INSERT INTO users (email, password_hash, consent_given) VALUES ($1, $2, $3) RETURNING id, email, role',
-      [email, passwordHash, true]
+      'INSERT INTO users (email, password_hash, terms_accepted_at) VALUES ($1, $2, NOW()) RETURNING id, email, role, terms_accepted_at, recording_consent_at',
+      [email, passwordHash]
     );
 
     const user = result.rows[0];
     const token = generateToken(user.id);
 
     res.status(201).json({
-      user: { id: user.id, email: user.email, role: user.role },
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        termsAcceptedAt: user.terms_accepted_at,
+        recordingConsentAt: user.recording_consent_at
+      },
       token
     });
   } catch (error) {
@@ -81,7 +87,13 @@ router.post('/login', [
     const token = generateToken(user.id);
 
     res.json({
-      user: { id: user.id, email: user.email, role: user.role },
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        termsAcceptedAt: user.terms_accepted_at,
+        recordingConsentAt: user.recording_consent_at
+      },
       token
     });
   } catch (error) {

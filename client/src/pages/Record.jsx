@@ -1,12 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import api from '../utils/api';
+import { useAuth } from '../contexts/AuthContext';
 import AudioRecorder, { AUDIO_CONSTRAINTS } from '../utils/audioRecorder';
 import Waveform, { StaticWaveform } from '../components/Waveform';
 import ProgressBar from '../components/ProgressBar';
 
 export default function Record() {
   const { corpusId } = useParams();
+  const { hasRecordingConsent, giveRecordingConsent } = useAuth();
+  const [consentLoading, setConsentLoading] = useState(false);
 
   const [corpus, setCorpus] = useState(null);
   const [prompt, setPrompt] = useState(null);
@@ -206,10 +209,80 @@ export default function Record() {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  const handleGiveConsent = async () => {
+    setConsentLoading(true);
+    try {
+      await giveRecordingConsent();
+    } catch (err) {
+      setError('Failed to save consent. Please try again.');
+    } finally {
+      setConsentLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="loading">
         <div className="spinner"></div>
+      </div>
+    );
+  }
+
+  // Show consent gate if user hasn't given recording consent
+  if (!hasRecordingConsent) {
+    return (
+      <div className="page">
+        <div className="page-header">
+          <Link to="/" className="btn btn-outline btn-sm mb-2">
+            Back to Dashboard
+          </Link>
+          <h1 className="page-title">Recording Consent Required</h1>
+        </div>
+
+        <div className="card" style={{ maxWidth: 600, margin: '0 auto' }}>
+          <h3>Before you start recording</h3>
+          <p>Please read and accept the following to continue:</p>
+
+          <div style={{
+            background: 'var(--background)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            padding: '1rem',
+            marginBottom: '1rem',
+            fontSize: '0.875rem'
+          }}>
+            <p><strong>By recording, I understand and agree that:</strong></p>
+            <ul style={{ paddingLeft: '1.5rem', marginTop: '0.5rem' }}>
+              <li>My voice recordings will be used to create speech recognition and synthesis datasets</li>
+              <li>Recordings may be shared publicly for research purposes</li>
+              <li>Recordings will be associated with anonymized IDs, not my email</li>
+              <li>I can delete my recordings or anonymize them at any time from my Profile</li>
+              <li>Once anonymized or included in released datasets, recordings cannot be withdrawn</li>
+            </ul>
+          </div>
+
+          <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+            For more information, see our{' '}
+            <Link to="/privacy" target="_blank">Privacy Policy</Link>
+            {' '}and{' '}
+            <Link to="/terms" target="_blank">Terms of Service</Link>.
+          </p>
+
+          {error && <div className="alert alert-error">{error}</div>}
+
+          <div className="flex gap-2 mt-4">
+            <Link to="/" className="btn btn-outline">
+              Go Back
+            </Link>
+            <button
+              onClick={handleGiveConsent}
+              className="btn btn-primary"
+              disabled={consentLoading}
+            >
+              {consentLoading ? 'Saving...' : 'I Agree - Start Recording'}
+            </button>
+          </div>
+        </div>
       </div>
     );
   }

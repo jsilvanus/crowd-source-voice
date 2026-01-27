@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../utils/api';
 
@@ -10,9 +10,11 @@ export default function Profile() {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteOption, setDeleteOption] = useState('delete');
   const [deleting, setDeleting] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     loadStats();
@@ -48,6 +50,40 @@ export default function Profile() {
     }
   };
 
+  const handleExportData = async () => {
+    setExporting(true);
+    setError('');
+
+    try {
+      const response = await api.get('/me/export');
+      const blob = new Blob([JSON.stringify(response.data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `my-data-export-${Date.now()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setMessage('Data exported successfully!');
+    } catch (err) {
+      setError(err.message || 'Failed to export data');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const formatDate = (dateString) => {
+    if (!dateString) return 'Not set';
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
   if (loading) {
     return (
       <div className="loading">
@@ -64,6 +100,7 @@ export default function Profile() {
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}
+      {message && <div className="alert alert-success">{message}</div>}
 
       <div className="card">
         <h3 className="card-title">Account Information</h3>
@@ -77,7 +114,35 @@ export default function Profile() {
               {user?.role}
             </span>
           </div>
+          <div style={{ marginBottom: '0.5rem' }}>
+            <strong>Terms Accepted:</strong> {formatDate(user?.termsAcceptedAt)}
+          </div>
+          <div style={{ marginBottom: '0.5rem' }}>
+            <strong>Recording Consent:</strong>{' '}
+            {user?.recordingConsentAt ? (
+              <span style={{ color: 'var(--success)' }}>{formatDate(user?.recordingConsentAt)}</span>
+            ) : (
+              <span style={{ color: 'var(--text-secondary)' }}>Not yet given</span>
+            )}
+          </div>
         </div>
+      </div>
+
+      <div className="card mt-4">
+        <h3 className="card-title">Privacy & Data</h3>
+        <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+          View our <Link to="/privacy">Privacy Policy</Link> and <Link to="/terms">Terms of Service</Link>.
+        </p>
+        <button
+          onClick={handleExportData}
+          className="btn btn-primary"
+          disabled={exporting}
+        >
+          {exporting ? 'Exporting...' : 'Export My Data'}
+        </button>
+        <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
+          Download all your personal data including account info, recordings, and validations.
+        </p>
       </div>
 
       {stats && (

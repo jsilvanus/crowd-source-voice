@@ -6,7 +6,7 @@ export default function Register() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [consent, setConsent] = useState(false);
+  const [acceptTerms, setAcceptTerms] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const { register } = useAuth();
@@ -26,15 +26,15 @@ export default function Register() {
       return;
     }
 
-    if (!consent) {
-      setError('You must agree to the terms to register');
+    if (!acceptTerms) {
+      setError('You must accept the Terms of Service and Privacy Policy');
       return;
     }
 
     setLoading(true);
 
     try {
-      await register(email, password, consent);
+      await register(email, password, acceptTerms);
       navigate('/');
     } catch (err) {
       setError(err.message || 'Registration failed');
@@ -93,13 +93,15 @@ export default function Register() {
               <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
                 <input
                   type="checkbox"
-                  checked={consent}
-                  onChange={(e) => setConsent(e.target.checked)}
+                  checked={acceptTerms}
+                  onChange={(e) => setAcceptTerms(e.target.checked)}
                   style={{ marginTop: '4px' }}
                 />
                 <span style={{ fontSize: '0.875rem' }}>
-                  I agree that my voice recordings will be used for training speech
-                  recognition models. I understand I can delete my data at any time.
+                  I have read and agree to the{' '}
+                  <Link to="/terms" target="_blank">Terms of Service</Link>
+                  {' '}and{' '}
+                  <Link to="/privacy" target="_blank">Privacy Policy</Link>.
                 </span>
               </label>
             </div>
