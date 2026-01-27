@@ -7,6 +7,7 @@ import { body, validationResult } from 'express-validator';
 import { query } from '../db/index.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { splitCorpus, detectFormat } from '../utils/corpusSplitter.js';
+import { checkDiskSpace } from '../middleware/diskSpace.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -67,7 +68,7 @@ router.post('/', authenticate, requireAdmin, [
 });
 
 // POST /corpus/:id/upload - Upload corpus source file (admin only)
-router.post('/:id/upload', authenticate, requireAdmin, upload.single('file'), async (req, res, next) => {
+router.post('/:id/upload', authenticate, requireAdmin, checkDiskSpace, upload.single('file'), async (req, res, next) => {
   try {
     const corpusId = parseInt(req.params.id);
 

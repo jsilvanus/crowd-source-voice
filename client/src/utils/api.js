@@ -62,8 +62,61 @@ class ApiClient {
     return this.request('DELETE', path);
   }
 
-  upload(path, formData) {
-    return this.request('POST', path, formData);
+  /**
+   * Upload with progress tracking using XMLHttpRequest
+   * @param {string} path - API endpoint
+   * @param {FormData} formData - Form data to upload
+   * @param {Object} options - Options
+   * @param {function} options.onProgress - Progress callback (0-100)
+   * @returns {Promise<{data: any}>}
+   */
+  upload(path, formData, options = {}) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const token = localStorage.getItem('token');
+
+      xhr.open('POST', `${API_BASE}${path}`);
+
+      if (token) {
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      }
+
+      // Track upload progress
+      if (options.onProgress) {
+        xhr.upload.addEventListener('progress', (event) => {
+          if (event.lengthComputable) {
+            const percent = Math.round((event.loaded / event.total) * 100);
+            options.onProgress(percent);
+          }
+        });
+      }
+
+      xhr.addEventListener('load', () => {
+        try {
+          const json = JSON.parse(xhr.responseText);
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve({ data: json });
+          } else {
+            const error = new Error(json.error || json.message || 'Upload failed');
+            error.status = xhr.status;
+            error.data = json;
+            reject(error);
+          }
+        } catch (e) {
+          reject(new Error('Invalid response from server'));
+        }
+      });
+
+      xhr.addEventListener('error', () => {
+        reject(new Error('Network error during upload'));
+      });
+
+      xhr.addEventListener('abort', () => {
+        reject(new Error('Upload cancelled'));
+      });
+
+      xhr.send(formData);
+    });
   }
 }
 

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../../utils/api';
+import ProgressBar from '../../components/ProgressBar';
 
 export default function AdminCorpora() {
   const [corpora, setCorpora] = useState([]);
@@ -21,6 +22,7 @@ export default function AdminCorpora() {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadCorpusId, setUploadCorpusId] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -62,16 +64,20 @@ export default function AdminCorpora() {
     if (!file || !uploadCorpusId) return;
 
     setUploading(true);
+    setUploadProgress(0);
     setError('');
 
     try {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await api.upload(`/corpus/${uploadCorpusId}/upload`, formData);
+      const response = await api.upload(`/corpus/${uploadCorpusId}/upload`, formData, {
+        onProgress: (percent) => setUploadProgress(percent)
+      });
       setMessage(`Upload successful! Created ${response.data.promptsCreated} prompts.`);
       setShowUploadModal(false);
       setUploadCorpusId(null);
+      setUploadProgress(0);
       if (fileInputRef.current) fileInputRef.current.value = '';
       loadCorpora();
     } catch (err) {
@@ -324,6 +330,15 @@ export default function AdminCorpora() {
                 <strong>Music corpora:</strong> Will be split by ABC tune headers (X:).
               </div>
 
+              {uploading && (
+                <div style={{ marginBottom: '1rem' }}>
+                  <ProgressBar progress={uploadProgress} />
+                  <div style={{ textAlign: 'center', fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
+                    {uploadProgress < 100 ? 'Uploading...' : 'Processing...'}
+                  </div>
+                </div>
+              )}
+
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -334,7 +349,7 @@ export default function AdminCorpora() {
                   Cancel
                 </button>
                 <button type="submit" className="btn btn-primary" disabled={uploading}>
-                  {uploading ? 'Uploading...' : 'Upload & Process'}
+                  {uploading ? (uploadProgress < 100 ? 'Uploading...' : 'Processing...') : 'Upload & Process'}
                 </button>
               </div>
             </form>

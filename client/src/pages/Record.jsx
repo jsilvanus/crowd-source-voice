@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import api from '../utils/api';
 import AudioRecorder, { AUDIO_CONSTRAINTS } from '../utils/audioRecorder';
 import Waveform, { StaticWaveform } from '../components/Waveform';
+import ProgressBar from '../components/ProgressBar';
 
 export default function Record() {
   const { corpusId } = useParams();
@@ -20,6 +21,7 @@ export default function Record() {
   const [audioSamples, setAudioSamples] = useState(null);
   const [duration, setDuration] = useState(0);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [analysis, setAnalysis] = useState(null);
 
   // Waveform data for live visualization
@@ -161,6 +163,7 @@ export default function Record() {
     }
 
     setUploading(true);
+    setUploadProgress(0);
     setError('');
 
     try {
@@ -169,9 +172,12 @@ export default function Record() {
       formData.append('prompt_id', prompt.id);
       formData.append('duration', duration.toFixed(2));
 
-      await api.upload('/recording', formData);
+      await api.upload('/recording', formData, {
+        onProgress: (percent) => setUploadProgress(percent)
+      });
 
       setMessage('Recording submitted successfully!');
+      setUploadProgress(0);
 
       // Load next prompt after a short delay
       setTimeout(loadNextPrompt, 1500);
@@ -350,6 +356,12 @@ export default function Record() {
                   </div>
                 )}
 
+                {uploading && (
+                  <div style={{ marginBottom: '1rem', maxWidth: 300, margin: '0 auto 1rem' }}>
+                    <ProgressBar progress={uploadProgress} />
+                  </div>
+                )}
+
                 <div className="flex flex-center gap-2">
                   <button
                     onClick={discardRecording}
@@ -364,7 +376,7 @@ export default function Record() {
                     disabled={uploading || (analysis && !analysis.isValid)}
                     title={analysis && !analysis.isValid ? 'Fix issues before submitting' : ''}
                   >
-                    {uploading ? 'Submitting...' : 'Submit Recording'}
+                    {uploading ? `Uploading ${uploadProgress}%` : 'Submit Recording'}
                   </button>
                 </div>
               </div>

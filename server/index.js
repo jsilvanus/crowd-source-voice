@@ -11,6 +11,8 @@ import recordingRoutes from './routes/recording.js';
 import validationRoutes from './routes/validation.js';
 import userRoutes from './routes/user.js';
 import exportRoutes from './routes/export.js';
+import { getDiskSpaceStatus } from './middleware/diskSpace.js';
+import { authenticate, requireAdmin } from './middleware/auth.js';
 
 dotenv.config();
 
@@ -44,6 +46,9 @@ app.use('/api/export', exportRoutes);
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// Disk space status (admin only)
+app.get('/api/disk-space', authenticate, requireAdmin, getDiskSpaceStatus);
 
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {

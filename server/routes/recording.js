@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
 import { query } from '../db/index.js';
 import { authenticate } from '../middleware/auth.js';
+import { checkDiskSpace } from '../middleware/diskSpace.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -39,7 +40,7 @@ const upload = multer({
 });
 
 // POST /recording - Upload a new recording
-router.post('/', authenticate, upload.single('audio'), async (req, res, next) => {
+router.post('/', authenticate, checkDiskSpace, upload.single('audio'), async (req, res, next) => {
   try {
     const { prompt_id, duration } = req.body;
 
