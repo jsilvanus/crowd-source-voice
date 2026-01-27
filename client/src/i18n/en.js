@@ -261,6 +261,21 @@ export default {
     lastUpdated: 'Last updated',
   },
 
+  // Cookie Consent
+  cookies: {
+    title: 'This site uses local storage',
+    description: 'We use your browser\'s local storage to save your preferences and keep you logged in. No tracking cookies are used.',
+    items: {
+      auth: 'Authentication token (to keep you logged in)',
+      language: 'Language preference (English, Finnish, Swedish)',
+      theme: 'Theme preference (light/dark mode)',
+      consent: 'This consent choice',
+    },
+    moreInfo: 'For more details, see our',
+    accept: 'Accept',
+    decline: 'Decline',
+  },
+
   // Errors
   errors: {
     generic: 'Something went wrong. Please try again.',

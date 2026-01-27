@@ -261,6 +261,21 @@ export default {
     lastUpdated: 'Päivitetty viimeksi',
   },
 
+  // Cookie Consent
+  cookies: {
+    title: 'Tämä sivusto käyttää paikallista tallennusta',
+    description: 'Käytämme selaimesi paikallista tallennustilaa asetusten tallentamiseen ja kirjautumisen ylläpitämiseen. Seurantaevästeitä ei käytetä.',
+    items: {
+      auth: 'Todennustunniste (pitää sinut kirjautuneena)',
+      language: 'Kieliasetus (englanti, suomi, ruotsi)',
+      theme: 'Teema-asetus (vaalea/tumma tila)',
+      consent: 'Tämä suostumusvalinta',
+    },
+    moreInfo: 'Lisätietoja löydät',
+    accept: 'Hyväksy',
+    decline: 'Hylkää',
+  },
+
   // Errors
   errors: {
     generic: 'Jokin meni pieleen. Yritä uudelleen.',

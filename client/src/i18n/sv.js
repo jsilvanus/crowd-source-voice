@@ -261,6 +261,21 @@ export default {
     lastUpdated: 'Senast uppdaterad',
   },
 
+  // Cookie Consent
+  cookies: {
+    title: 'Denna webbplats använder lokal lagring',
+    description: 'Vi använder din webbläsares lokala lagring för att spara dina inställningar och hålla dig inloggad. Inga spårningscookies används.',
+    items: {
+      auth: 'Autentiseringstoken (för att hålla dig inloggad)',
+      language: 'Språkinställning (engelska, finska, svenska)',
+      theme: 'Temainställning (ljust/mörkt läge)',
+      consent: 'Detta samtyckesval',
+    },
+    moreInfo: 'För mer information, se vår',
+    accept: 'Acceptera',
+    decline: 'Avböj',
+  },
+
   // Errors
   errors: {
     generic: 'Något gick fel. Försök igen.',

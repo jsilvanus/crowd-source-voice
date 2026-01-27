@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import Header from './components/Header';
+import CookieConsent from './components/CookieConsent';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
@@ -115,6 +116,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </main>
+      <CookieConsent />
     </>
   );
 }
