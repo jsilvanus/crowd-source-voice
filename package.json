@@ -1,6 +1,6 @@
 {
   "name": "crowd-source-voice",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Speech-to-Text / Audio Crowdsourcing App for collecting and validating audio recordings",
   "type": "module",
   "scripts": {
