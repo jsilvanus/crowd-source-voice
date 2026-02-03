@@ -4,12 +4,37 @@ A web application for crowdsourcing audio recordings for speech-to-text (STT) an
 
 ## Features
 
-- **Multi-corpus support**: Manage multiple text and music corpora
-- **Audio recording**: Web-based recording with playback
-- **Crowd validation**: Users score recordings for quality control
-- **Quality metrics**: Automatic quality scoring based on validations
-- **Dataset export**: Export validated recordings in CSV/JSON format
-- **GDPR compliant**: Users can delete or anonymize their data
+### Core Features
+- **Multi-corpus support**: Manage multiple text and music corpora with language tagging
+- **Audio recording**: Web-based recording with real-time waveform visualization
+- **Crowd validation**: Users score recordings (1-5 scale) for quality control
+- **Quality metrics**: Automatic quality scoring based on crowd validations
+- **Dataset export**: Export validated recordings in CSV/JSON format (Whisper-compatible)
+- **GDPR compliant**: Full data export, account deletion, and anonymization options
+
+### Audio Processing
+- **Real-time waveform**: Live visualization during recording using Canvas API
+- **Audio analysis**: Automatic detection of silence ratio, peak amplitude, and duration
+- **Quality gates**: Recordings must meet duration (0.5s-120s) and silence (<80%) requirements
+- **Format**: 16kHz mono WAV for optimal STT compatibility
+
+### Admin Features
+- **Admin dashboard**: Platform statistics including users, recordings, validations, and disk usage
+- **User management**: View users, change roles (user/admin), delete accounts
+- **Corpus management**: Create corpora, upload source files, reprocess prompts
+- **Flagged recordings**: Review low-quality or high-variance recordings
+- **Export tools**: Export datasets with quality filtering and statistics
+
+### Localization & Compliance
+- **Internationalization (i18n)**: Full support for English, Finnish, and Swedish
+- **Cookie consent**: Informational banner explaining local storage usage
+- **Recording consent**: Explicit consent gate before users can record
+- **Privacy & Terms**: Built-in Privacy Policy and Terms of Service pages
+- **Dark mode**: User-selectable light/dark theme with system preference detection
+
+### Infrastructure
+- **Disk space monitoring**: Automatic upload blocking when storage is low (<200MB)
+- **Progress indicators**: Upload progress bars and corpus processing status
 
 ## Tech Stack
 
@@ -90,15 +115,27 @@ The app will be available at http://localhost:5173
 ### Validation
 - `GET /api/validation` - Get recording to validate
 - `POST /api/validation` - Submit validation score
+- `GET /api/validation/stats` - Get validation statistics
 
-### User Data
+### User Data & GDPR
 - `GET /api/me/recordings` - Get own recordings
 - `GET /api/me/stats` - Get user statistics
-- `DELETE /api/me` - Delete account and data
+- `GET /api/me/export` - Export all personal data (GDPR)
+- `DELETE /api/me` - Delete account and all data
 - `POST /api/me/anonymize` - Delete account, keep anonymous recordings
+- `POST /api/me/consent/recording` - Give recording consent
+- `DELETE /api/me/consent/recording` - Withdraw recording consent
+
+### Admin
+- `GET /api/admin/stats` - Platform statistics (users, recordings, disk space)
+- `GET /api/admin/users` - List all users
+- `PUT /api/admin/users/:id` - Update user role
+- `DELETE /api/admin/users/:id` - Delete user account
 
 ### Export (Admin)
 - `GET /api/export?corpus_id=&format=csv|json` - Export dataset
+- `GET /api/export/stats` - Export statistics per corpus
+- `GET /api/export/manifest?corpus_id=` - Get file manifest for export
 
 ## Corpus File Formats
 
@@ -113,11 +150,41 @@ The app will be available at http://localhost:5173
 
 ## Quality Control
 
+### Recording Requirements
+Before submission, recordings are analyzed for:
+- **Duration**: Must be between 0.5 and 120 seconds
+- **Silence ratio**: Must be less than 80% silence
+- **Audio level**: Peak amplitude is measured for quality feedback
+
+### Validation Thresholds
 Recordings are accepted for export when:
 - At least 2 validations from different users
 - Average score >= 4.0 (on 1-5 scale)
 
 Flagged recordings (low scores or high variance) appear in admin review.
+
+## Internationalization (i18n)
+
+The application supports multiple languages:
+- **English (EN)** - Default
+- **Finnish (FI)**
+- **Swedish (SV)**
+
+Users can switch languages via the header dropdown. The selected language is persisted in localStorage.
+
+To add a new language:
+1. Create a new translation file in `client/src/i18n/` (e.g., `de.js`)
+2. Export the translations object with all required keys
+3. Add the language to the `languages` array in `client/src/i18n/index.js`
+
+## Theming
+
+The application supports light and dark modes:
+- Users can toggle between themes via the header
+- Theme preference is saved to localStorage
+- System preference is detected on first visit
+
+Theme variables are defined in `client/src/index.css` using CSS custom properties.
 
 ## Deployment
 
