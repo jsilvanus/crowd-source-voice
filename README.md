@@ -70,9 +70,9 @@ cp .env.example .env
 # Edit .env with your database credentials
 ```
 
-4. Create the database:
+4. Create the database (here, with a docker example):
 ```bash
-createdb crowd_source_voice
+docker compose up -d
 ```
 
 5. Run migrations:

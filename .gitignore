@@ -2,6 +2,9 @@
 node_modules/
 client/node_modules/
 
+# The data directory for PostgreSQL
+data/
+
 # Environment files
 .env
 .env.local

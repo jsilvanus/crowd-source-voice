@@ -1,0 +1,15 @@
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: crowd-source-voice
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: crowdsourcer
+      POSTGRES_PASSWORD: crowdsourcer_password
+      POSTGRES_DB: crowd_source_voice_db
+    ports:
+      - "7005:5432"
+    volumes:
+      - ./data:/var/lib/postgresql/data
+
