@@ -4,6 +4,7 @@ import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { query } from '../db/index.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
+import { parseId } from '../utils/params.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,12 +18,12 @@ const MIN_SCORE_THRESHOLD = 4.0;
 // GET /export - Export dataset for a corpus
 router.get('/', authenticate, requireAdmin, async (req, res, next) => {
   try {
-    const corpusId = req.query.corpus_id;
+    const corpusId = parseId(req.query.corpus_id);
     const format = req.query.format || 'csv'; // csv or json
     const includeAll = req.query.include_all === 'true'; // Include non-validated
 
     if (!corpusId) {
-      return res.status(400).json({ error: 'corpus_id is required' });
+      return res.status(400).json({ error: 'A valid corpus_id is required' });
     }
 
     // Get corpus info
@@ -101,14 +102,17 @@ router.get('/', authenticate, requireAdmin, async (req, res, next) => {
       const csvRows = exportData.map(row => {
         const content = corpus.type === 'music' ? row.notation : row.text;
         // Escape quotes and newlines in content
-        const escapedContent = `"${content.replace(/"/g, '""').replace(/\n/g, '\\n')}"`;
+        const escapedContent = `"${content.replace(/"/g, '""').replace(/\r/g, '').replace(/\n/g, '\\n')}"`;
         return `${row.file},${escapedContent},${row.duration || ''},${row.quality_score || ''}`;
       });
 
       const csv = [header, ...csvRows].join('\n');
 
+      // Header values must be ASCII; replace anything else in the corpus name
+      const safeName = corpus.name.replace(/[^\w.-]+/g, '_') || 'corpus';
+
       res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', `attachment; filename="${corpus.name}-dataset.csv"`);
+      res.setHeader('Content-Disposition', `attachment; filename="${safeName}-dataset.csv"`);
       res.send(csv);
     }
   } catch (error) {
@@ -119,10 +123,10 @@ router.get('/', authenticate, requireAdmin, async (req, res, next) => {
 // GET /export/manifest - Get export manifest with file paths
 router.get('/manifest', authenticate, requireAdmin, async (req, res, next) => {
   try {
-    const corpusId = req.query.corpus_id;
+    const corpusId = parseId(req.query.corpus_id);
 
     if (!corpusId) {
-      return res.status(400).json({ error: 'corpus_id is required' });
+      return res.status(400).json({ error: 'A valid corpus_id is required' });
     }
 
     const result = await query(`
@@ -179,9 +183,13 @@ router.get('/stats', authenticate, requireAdmin, async (req, res, next) => {
 
     const params = [MIN_SCORE_THRESHOLD, MIN_VALIDATIONS];
 
-    if (corpusId) {
+    if (corpusId !== undefined) {
+      const parsedCorpusId = parseId(corpusId);
+      if (!parsedCorpusId) {
+        return res.status(400).json({ error: 'Invalid corpus_id' });
+      }
       queryText += ' WHERE c.id = $3';
-      params.push(corpusId);
+      params.push(parsedCorpusId);
     }
 
     queryText += ' GROUP BY c.id ORDER BY c.name';

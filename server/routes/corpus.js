@@ -4,10 +4,11 @@ import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { body, validationResult } from 'express-validator';
-import { query } from '../db/index.js';
+import { query, withTransaction } from '../db/index.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { splitCorpus, detectFormat } from '../utils/corpusSplitter.js';
 import { checkDiskSpace } from '../middleware/diskSpace.js';
+import { parseId } from '../utils/params.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -70,7 +71,10 @@ router.post('/', authenticate, requireAdmin, [
 // POST /corpus/:id/upload - Upload corpus source file (admin only)
 router.post('/:id/upload', authenticate, requireAdmin, checkDiskSpace, upload.single('file'), async (req, res, next) => {
   try {
-    const corpusId = parseInt(req.params.id);
+    const corpusId = parseId(req.params.id);
+    if (!corpusId) {
+      return res.status(400).json({ error: 'Invalid corpus id' });
+    }
 
     // Verify corpus exists
     const corpusResult = await query('SELECT * FROM corpora WHERE id = $1', [corpusId]);
@@ -93,21 +97,19 @@ router.post('/:id/upload', authenticate, requireAdmin, checkDiskSpace, upload.si
       return res.status(400).json({ error: 'No valid prompts found in the file' });
     }
 
-    // Store source content in database
-    await query(
-      'UPDATE corpora SET source_filename = $1, source_content = $2 WHERE id = $3',
-      [req.file.originalname, content, corpusId]
-    );
+    // Store source content and insert prompts atomically
+    await withTransaction(async (client) => {
+      await client.query(
+        'UPDATE corpora SET source_filename = $1, source_content = $2 WHERE id = $3',
+        [req.file.originalname, content, corpusId]
+      );
 
-    // Insert prompts into database
-    const insertPromises = prompts.map(text =>
-      query(
-        'INSERT INTO prompts (corpus_id, type, text) VALUES ($1, $2, $3) RETURNING id',
-        [corpusId, corpus.type, text]
-      )
-    );
-
-    await Promise.all(insertPromises);
+      await client.query(
+        `INSERT INTO prompts (corpus_id, type, text)
+         SELECT $1, $2, unnest($3::text[])`,
+        [corpusId, corpus.type, prompts]
+      );
+    });
 
     // Clean up uploaded file (content is now in database)
     await fs.unlink(req.file.path);
@@ -147,7 +149,10 @@ router.get('/', authenticate, async (req, res, next) => {
 // GET /corpus/:id - Get single corpus with details
 router.get('/:id', authenticate, async (req, res, next) => {
   try {
-    const corpusId = parseInt(req.params.id);
+    const corpusId = parseId(req.params.id);
+    if (!corpusId) {
+      return res.status(400).json({ error: 'Invalid corpus id' });
+    }
 
     const corpusResult = await query(`
       SELECT
@@ -175,7 +180,10 @@ router.get('/:id', authenticate, async (req, res, next) => {
 // GET /corpus/:id/skipped - Get skipped prompts for admin review
 router.get('/:id/skipped', authenticate, requireAdmin, async (req, res, next) => {
   try {
-    const corpusId = parseInt(req.params.id);
+    const corpusId = parseId(req.params.id);
+    if (!corpusId) {
+      return res.status(400).json({ error: 'Invalid corpus id' });
+    }
     const threshold = parseInt(req.query.threshold) || 3;
 
     const result = await query(`
@@ -196,7 +204,10 @@ router.get('/:id/skipped', authenticate, requireAdmin, async (req, res, next) =>
 // GET /corpus/:id/source - Get corpus source content (admin only)
 router.get('/:id/source', authenticate, requireAdmin, async (req, res, next) => {
   try {
-    const corpusId = parseInt(req.params.id);
+    const corpusId = parseId(req.params.id);
+    if (!corpusId) {
+      return res.status(400).json({ error: 'Invalid corpus id' });
+    }
 
     const result = await query(
       'SELECT source_filename, source_content FROM corpora WHERE id = $1',
@@ -225,7 +236,10 @@ router.get('/:id/source', authenticate, requireAdmin, async (req, res, next) => 
 // POST /corpus/:id/reprocess - Re-process corpus from stored source (admin only)
 router.post('/:id/reprocess', authenticate, requireAdmin, async (req, res, next) => {
   try {
-    const corpusId = parseInt(req.params.id);
+    const corpusId = parseId(req.params.id);
+    if (!corpusId) {
+      return res.status(400).json({ error: 'Invalid corpus id' });
+    }
 
     const corpusResult = await query('SELECT * FROM corpora WHERE id = $1', [corpusId]);
     if (corpusResult.rows.length === 0) {
@@ -238,10 +252,8 @@ router.post('/:id/reprocess', authenticate, requireAdmin, async (req, res, next)
       return res.status(400).json({ error: 'No source content stored for this corpus' });
     }
 
-    // Delete existing prompts
-    await query('DELETE FROM prompts WHERE corpus_id = $1', [corpusId]);
-
-    // Re-process the stored content
+    // Re-process the stored content BEFORE deleting anything,
+    // so a bad source can't wipe existing prompts
     const format = detectFormat(corpus.source_filename || 'corpus.txt', corpus.source_content);
     const prompts = splitCorpus(corpus.source_content, corpus.type, format);
 
@@ -249,15 +261,32 @@ router.post('/:id/reprocess', authenticate, requireAdmin, async (req, res, next)
       return res.status(400).json({ error: 'No valid prompts found in the stored content' });
     }
 
-    // Insert new prompts
-    const insertPromises = prompts.map(text =>
-      query(
-        'INSERT INTO prompts (corpus_id, type, text) VALUES ($1, $2, $3) RETURNING id',
-        [corpusId, corpus.type, text]
-      )
-    );
+    // Replace prompts atomically. Note: deleting prompts cascades to
+    // their recordings (DB rows); audio files are cleaned up below.
+    const staleFiles = await withTransaction(async (client) => {
+      const filesResult = await client.query(
+        `SELECT r.file_path FROM recordings r
+         JOIN prompts p ON r.prompt_id = p.id
+         WHERE p.corpus_id = $1`,
+        [corpusId]
+      );
 
-    await Promise.all(insertPromises);
+      await client.query('DELETE FROM prompts WHERE corpus_id = $1', [corpusId]);
+
+      await client.query(
+        `INSERT INTO prompts (corpus_id, type, text)
+         SELECT $1, $2, unnest($3::text[])`,
+        [corpusId, corpus.type, prompts]
+      );
+
+      return filesResult.rows;
+    });
+
+    // Remove audio files of the cascade-deleted recordings
+    for (const row of staleFiles) {
+      const filePath = path.join(__dirname, '../..', row.file_path);
+      await fs.unlink(filePath).catch(() => {});
+    }
 
     res.json({
       message: 'Corpus re-processed successfully',
@@ -271,12 +300,29 @@ router.post('/:id/reprocess', authenticate, requireAdmin, async (req, res, next)
 // DELETE /corpus/:id - Delete a corpus (admin only)
 router.delete('/:id', authenticate, requireAdmin, async (req, res, next) => {
   try {
-    const corpusId = parseInt(req.params.id);
+    const corpusId = parseId(req.params.id);
+    if (!corpusId) {
+      return res.status(400).json({ error: 'Invalid corpus id' });
+    }
+
+    // Collect audio file paths before the cascade delete removes the rows
+    const filesResult = await query(
+      `SELECT r.file_path FROM recordings r
+       JOIN prompts p ON r.prompt_id = p.id
+       WHERE p.corpus_id = $1`,
+      [corpusId]
+    );
 
     const result = await query('DELETE FROM corpora WHERE id = $1 RETURNING id', [corpusId]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Corpus not found' });
+    }
+
+    // Remove audio files of the deleted recordings
+    for (const row of filesResult.rows) {
+      const filePath = path.join(__dirname, '../..', row.file_path);
+      await fs.unlink(filePath).catch(() => {});
     }
 
     res.json({ message: 'Corpus deleted successfully' });

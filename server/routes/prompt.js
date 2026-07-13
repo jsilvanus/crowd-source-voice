@@ -1,6 +1,7 @@
 import express from 'express';
 import { query } from '../db/index.js';
 import { authenticate } from '../middleware/auth.js';
+import { parseId } from '../utils/params.js';
 
 const router = express.Router();
 
@@ -8,10 +9,10 @@ const router = express.Router();
 // Prioritizes prompts with fewer recordings and lower skipped_count
 router.get('/', authenticate, async (req, res, next) => {
   try {
-    const corpusId = req.query.corpus_id;
+    const corpusId = parseId(req.query.corpus_id);
 
     if (!corpusId) {
-      return res.status(400).json({ error: 'corpus_id is required' });
+      return res.status(400).json({ error: 'A valid corpus_id is required' });
     }
 
     // Get a prompt that:
@@ -50,7 +51,10 @@ router.get('/', authenticate, async (req, res, next) => {
 // GET /prompt/:id - Get a specific prompt
 router.get('/:id', authenticate, async (req, res, next) => {
   try {
-    const promptId = parseInt(req.params.id);
+    const promptId = parseId(req.params.id);
+    if (!promptId) {
+      return res.status(400).json({ error: 'Invalid prompt id' });
+    }
 
     const result = await query(`
       SELECT p.*, c.name as corpus_name, c.language, c.type as corpus_type
@@ -72,7 +76,10 @@ router.get('/:id', authenticate, async (req, res, next) => {
 // POST /prompt/:id/skip - Skip a prompt
 router.post('/:id/skip', authenticate, async (req, res, next) => {
   try {
-    const promptId = parseInt(req.params.id);
+    const promptId = parseId(req.params.id);
+    if (!promptId) {
+      return res.status(400).json({ error: 'Invalid prompt id' });
+    }
 
     const result = await query(`
       UPDATE prompts
@@ -97,14 +104,19 @@ router.post('/:id/skip', authenticate, async (req, res, next) => {
 // GET /prompt/stats/:corpus_id - Get prompt statistics for a corpus
 router.get('/stats/:corpus_id', authenticate, async (req, res, next) => {
   try {
-    const corpusId = parseInt(req.params.corpus_id);
+    const corpusId = parseId(req.params.corpus_id);
+    if (!corpusId) {
+      return res.status(400).json({ error: 'Invalid corpus id' });
+    }
 
+    // COUNT/AVG over DISTINCT prompts so the recordings join
+    // does not multiply per-prompt rows
     const result = await query(`
       SELECT
-        COUNT(*) as total_prompts,
+        COUNT(DISTINCT p.id) as total_prompts,
         COUNT(DISTINCT r.prompt_id) as prompts_with_recordings,
-        SUM(CASE WHEN p.skipped_count > 0 THEN 1 ELSE 0 END) as skipped_prompts,
-        AVG(p.skipped_count) as avg_skip_count
+        COUNT(DISTINCT CASE WHEN p.skipped_count > 0 THEN p.id END) as skipped_prompts,
+        (SELECT AVG(skipped_count) FROM prompts WHERE corpus_id = $1) as avg_skip_count
       FROM prompts p
       LEFT JOIN recordings r ON p.id = r.prompt_id
       WHERE p.corpus_id = $1

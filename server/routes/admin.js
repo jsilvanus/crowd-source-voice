@@ -2,9 +2,10 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
-import { query } from '../db/index.js';
+import { query, withTransaction } from '../db/index.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { getDiskSpace } from '../middleware/diskSpace.js';
+import { parseId } from '../utils/params.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -104,7 +105,10 @@ router.get('/users', async (req, res, next) => {
 // GET /admin/users/:id - Get single user details
 router.get('/users/:id', async (req, res, next) => {
   try {
-    const userId = parseInt(req.params.id);
+    const userId = parseId(req.params.id);
+    if (!userId) {
+      return res.status(400).json({ error: 'Invalid user id' });
+    }
 
     const userResult = await query(`
       SELECT
@@ -131,7 +135,10 @@ router.get('/users/:id', async (req, res, next) => {
 // PUT /admin/users/:id/role - Update user role
 router.put('/users/:id/role', async (req, res, next) => {
   try {
-    const userId = parseInt(req.params.id);
+    const userId = parseId(req.params.id);
+    if (!userId) {
+      return res.status(400).json({ error: 'Invalid user id' });
+    }
     const { role } = req.body;
 
     if (!['user', 'admin'].includes(role)) {
@@ -164,40 +171,42 @@ router.put('/users/:id/role', async (req, res, next) => {
 // DELETE /admin/users/:id - Delete a user
 router.delete('/users/:id', async (req, res, next) => {
   try {
-    const userId = parseInt(req.params.id);
+    const userId = parseId(req.params.id);
+    if (!userId) {
+      return res.status(400).json({ error: 'Invalid user id' });
+    }
 
     // Prevent self-deletion
     if (userId === req.user.id) {
       return res.status(400).json({ error: 'You cannot delete your own account from admin panel. Use Profile instead.' });
     }
 
-    // Get user's recordings to delete files
-    const recordingsResult = await query(
-      'SELECT file_path FROM recordings WHERE user_id = $1',
-      [userId]
-    );
+    // Delete all user data atomically, then remove the audio files
+    const { deletedUser, recordings } = await withTransaction(async (client) => {
+      const recordingsResult = await client.query(
+        'SELECT file_path FROM recordings WHERE user_id = $1',
+        [userId]
+      );
 
-    // Delete audio files
-    for (const recording of recordingsResult.rows) {
+      await client.query('DELETE FROM validations WHERE validator_id = $1', [userId]);
+      await client.query('DELETE FROM recordings WHERE user_id = $1', [userId]);
+      const result = await client.query('DELETE FROM users WHERE id = $1 RETURNING email', [userId]);
+
+      return { deletedUser: result.rows[0], recordings: recordingsResult.rows };
+    });
+
+    if (!deletedUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Delete audio files after the DB commit
+    for (const recording of recordings) {
       const filePath = path.join(__dirname, '../..', recording.file_path);
       await fs.unlink(filePath).catch(() => {});
     }
 
-    // Delete validations by this user
-    await query('DELETE FROM validations WHERE validator_id = $1', [userId]);
-
-    // Delete user's recordings
-    await query('DELETE FROM recordings WHERE user_id = $1', [userId]);
-
-    // Delete user
-    const result = await query('DELETE FROM users WHERE id = $1 RETURNING email', [userId]);
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
     res.json({
-      message: `User ${result.rows[0].email} and all their data have been deleted.`
+      message: `User ${deletedUser.email} and all their data have been deleted.`
     });
   } catch (error) {
     next(error);

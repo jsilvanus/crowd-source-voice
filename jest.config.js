@@ -1,7 +1,7 @@
 export default {
   testEnvironment: 'node',
   roots: ['<rootDir>/server'],
-  testMatch: ['**/__tests__/**/*.js', '**/*.test.js'],
+  testMatch: ['**/*.test.js'],
   moduleFileExtensions: ['js', 'json'],
   collectCoverageFrom: [
     'server/**/*.js',

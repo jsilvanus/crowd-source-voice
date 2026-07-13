@@ -1,8 +1,12 @@
+// Load .env before any other module reads process.env at import time
+// (e.g. JWT_SECRET in middleware/auth.js)
+import 'dotenv/config';
+
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import multer from 'multer';
 import { fileURLToPath } from 'url';
-import dotenv from 'dotenv';
 
 import authRoutes from './routes/auth.js';
 import corpusRoutes from './routes/corpus.js';
@@ -14,8 +18,6 @@ import exportRoutes from './routes/export.js';
 import adminRoutes from './routes/admin.js';
 import { getDiskSpaceStatus } from './middleware/diskSpace.js';
 import { authenticate, requireAdmin } from './middleware/auth.js';
-
-dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -64,6 +66,16 @@ if (process.env.NODE_ENV === 'production') {
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Error:', err);
+
+  // Upload errors are client errors, not server errors
+  if (err instanceof multer.MulterError) {
+    const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+    return res.status(status).json({ error: err.message, code: err.code });
+  }
+  if (err.message && err.message.startsWith('Invalid file type')) {
+    return res.status(400).json({ error: err.message });
+  }
+
   res.status(err.status || 500).json({
     error: err.message || 'Internal server error'
   });

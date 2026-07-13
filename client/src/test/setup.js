@@ -31,6 +31,18 @@ class MockAudioContext {
       onaudioprocess: null
     };
   }
+  createAnalyser() {
+    return {
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      fftSize: 2048,
+      frequencyBinCount: 1024,
+      getByteTimeDomainData: vi.fn()
+    };
+  }
+  get destination() {
+    return { connect: vi.fn(), disconnect: vi.fn() };
+  }
   close() {
     return Promise.resolve();
   }
