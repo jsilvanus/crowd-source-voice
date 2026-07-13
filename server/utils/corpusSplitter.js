@@ -11,7 +11,7 @@
  */
 export function splitTextCorpus(content, options = {}) {
   const maxWords = options.maxWords || 15;
-  const minWords = options.minWords || 3;
+  const minWords = options.minWords || 2;
 
   // Split by sentence-ending punctuation while preserving the punctuation
   const sentences = content
@@ -84,19 +84,23 @@ export function splitMusicCorpus(content) {
   for (const tune of tunes) {
     // Skip if it doesn't look like a valid ABC tune
     if (!tune.startsWith('X:') && !tune.includes('K:')) {
-      // Maybe it's a simple one-line melody
-      if (tune.match(/[A-Ga-g]/)) {
-        const normalized = tune.toLowerCase().replace(/\s+/g, '');
-        if (!seen.has(normalized)) {
-          seen.add(normalized);
-          prompts.push(tune);
-        }
+      // Not ABC: treat each line as a simple one-line melody
+      for (const line of tune.split('\n')) {
+        const melody = line.trim();
+        if (!melody || !melody.match(/[A-Ga-g]/)) continue;
+        const normalized = melody.toLowerCase().replace(/\s+/g, '');
+        if (seen.has(normalized)) continue;
+        seen.add(normalized);
+        prompts.push(melody);
       }
       continue;
     }
 
-    // Normalize and check for duplicates
-    const normalized = tune.toLowerCase().replace(/\s+/g, '');
+    // Normalize (ignoring the X: tune number) and check for duplicates
+    const normalized = tune
+      .replace(/^X:\s*\d+\s*\n?/, '')
+      .toLowerCase()
+      .replace(/\s+/g, '');
     if (seen.has(normalized)) continue;
     seen.add(normalized);
 
@@ -112,16 +116,17 @@ export function splitMusicCorpus(content) {
 export function parseJsonCorpus(content, type) {
   const data = JSON.parse(content);
 
-  // Handle array of strings
+  // Handle array of strings or objects with text/content/prompt field
   if (Array.isArray(data)) {
-    return data.filter(item => typeof item === 'string' && item.trim());
-  }
-
-  // Handle array of objects with text/content field
-  if (Array.isArray(data) && data.length > 0 && typeof data[0] === 'object') {
     return data
-      .map(item => item.text || item.content || item.prompt || '')
-      .filter(s => s.trim());
+      .map(item => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object') {
+          return item.text || item.content || item.prompt || '';
+        }
+        return '';
+      })
+      .filter(s => typeof s === 'string' && s.trim());
   }
 
   // Handle object with items/prompts/data array

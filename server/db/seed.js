@@ -18,8 +18,8 @@ async function seed() {
 
     if (existingAdmin.rows.length === 0) {
       await pool.query(
-        `INSERT INTO users (email, password_hash, role, consent_given)
-         VALUES ($1, $2, 'admin', true)`,
+        `INSERT INTO users (email, password_hash, role, terms_accepted_at, recording_consent_at)
+         VALUES ($1, $2, 'admin', NOW(), NOW())`,
         [adminEmail, passwordHash]
       );
       console.log(`Admin user created: ${adminEmail}`);

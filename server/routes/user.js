@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
-import { query } from '../db/index.js';
+import { query, withTransaction } from '../db/index.js';
 import { authenticate } from '../middleware/auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -179,28 +179,28 @@ router.delete('/', authenticate, async (req, res, next) => {
   try {
     const userId = req.user.id;
 
-    // Get all user's recordings to delete the files
-    const recordingsResult = await query(
-      'SELECT file_path FROM recordings WHERE user_id = $1',
-      [userId]
-    );
+    // Delete all user data atomically, then remove the audio files
+    const recordings = await withTransaction(async (client) => {
+      const recordingsResult = await client.query(
+        'SELECT file_path FROM recordings WHERE user_id = $1',
+        [userId]
+      );
 
-    // Delete audio files
-    for (const recording of recordingsResult.rows) {
+      await client.query('DELETE FROM validations WHERE validator_id = $1', [userId]);
+      await client.query('DELETE FROM recordings WHERE user_id = $1', [userId]);
+      await client.query('DELETE FROM users WHERE id = $1', [userId]);
+
+      return recordingsResult.rows;
+    });
+
+    // Delete audio files (after the DB commit, so a DB failure
+    // can't leave recordings pointing at missing files)
+    for (const recording of recordings) {
       const filePath = path.join(__dirname, '../..', recording.file_path);
       await fs.unlink(filePath).catch(() => {
         // File might not exist, that's okay
       });
     }
-
-    // Delete all user's validations
-    await query('DELETE FROM validations WHERE validator_id = $1', [userId]);
-
-    // Delete all user's recordings
-    await query('DELETE FROM recordings WHERE user_id = $1', [userId]);
-
-    // Delete user account
-    await query('DELETE FROM users WHERE id = $1', [userId]);
 
     res.json({ message: 'Account and all associated data deleted successfully' });
   } catch (error) {
@@ -214,14 +214,16 @@ router.post('/anonymize', authenticate, async (req, res, next) => {
   try {
     const userId = req.user.id;
 
-    // Anonymize recordings by setting user_id to NULL
-    await query('UPDATE recordings SET user_id = NULL WHERE user_id = $1', [userId]);
+    await withTransaction(async (client) => {
+      // Anonymize recordings by setting user_id to NULL
+      await client.query('UPDATE recordings SET user_id = NULL WHERE user_id = $1', [userId]);
 
-    // Delete validations
-    await query('DELETE FROM validations WHERE validator_id = $1', [userId]);
+      // Delete validations
+      await client.query('DELETE FROM validations WHERE validator_id = $1', [userId]);
 
-    // Delete user account
-    await query('DELETE FROM users WHERE id = $1', [userId]);
+      // Delete user account
+      await client.query('DELETE FROM users WHERE id = $1', [userId]);
+    });
 
     res.json({
       message: 'Account deleted. Recordings have been anonymized and retained for the dataset.'

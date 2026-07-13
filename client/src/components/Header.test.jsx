@@ -2,7 +2,8 @@ import { describe, test, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import Header from './Header';
-import { AuthProvider } from '../contexts/AuthContext';
+import { ThemeProvider } from '../contexts/ThemeContext';
+import { I18nProvider } from '../contexts/I18nContext';
 
 // Mock the auth context
 vi.mock('../contexts/AuthContext', async () => {
@@ -18,7 +19,11 @@ import { useAuth } from '../contexts/AuthContext';
 const renderHeader = () => {
   return render(
     <BrowserRouter>
-      <Header />
+      <ThemeProvider>
+        <I18nProvider>
+          <Header />
+        </I18nProvider>
+      </ThemeProvider>
     </BrowserRouter>
   );
 };

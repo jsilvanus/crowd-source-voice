@@ -15,7 +15,7 @@ A web application for crowdsourcing audio recordings for speech-to-text (STT) an
 ### Audio Processing
 - **Real-time waveform**: Live visualization during recording using Canvas API
 - **Audio analysis**: Automatic detection of silence ratio, peak amplitude, and duration
-- **Quality gates**: Recordings must meet duration (0.5s-120s) and silence (<80%) requirements
+- **Quality gates**: Recordings must meet duration (0.5s-30s) and silence (<70%) requirements
 - **Format**: 16kHz mono WAV for optimal STT compatibility
 
 ### Admin Features
@@ -74,6 +74,7 @@ cp .env.example .env
 ```bash
 docker compose up -d
 ```
+The bundled `docker-compose.yml` exposes PostgreSQL on host port **7005** with user `crowdsourcer` and database `crowd_source_voice_db`; the defaults in `.env.example` match it. If you run your own PostgreSQL, adjust `DATABASE_URL` accordingly.
 
 5. Run migrations:
 ```bash
@@ -100,22 +101,30 @@ The app will be available at http://localhost:5173
 - `POST /api/auth/logout` - Logout
 - `GET /api/auth/me` - Get current user
 
-### Corpus Management (Admin)
-- `POST /api/corpus` - Create corpus
-- `POST /api/corpus/:id/upload` - Upload corpus file
+### Corpus Management
 - `GET /api/corpus` - List corpora with stats
 - `GET /api/corpus/:id` - Get corpus details
-- `DELETE /api/corpus/:id` - Delete corpus
+- `POST /api/corpus` - Create corpus (admin)
+- `POST /api/corpus/:id/upload` - Upload corpus file (admin)
+- `POST /api/corpus/:id/reprocess` - Re-split prompts from stored source (admin; replaces existing prompts and their recordings)
+- `GET /api/corpus/:id/source` - Get stored source content (admin)
+- `GET /api/corpus/:id/skipped?threshold=` - List frequently skipped prompts (admin)
+- `DELETE /api/corpus/:id` - Delete corpus and its audio files (admin)
 
-### Recording
+### Prompts & Recording
 - `GET /api/prompt?corpus_id=` - Get next prompt
+- `GET /api/prompt/:id` - Get a specific prompt
+- `GET /api/prompt/stats/:corpus_id` - Prompt statistics for a corpus
 - `POST /api/prompt/:id/skip` - Skip a prompt
 - `POST /api/recording` - Upload recording
+- `GET /api/recording/:id` - Get a recording
+- `DELETE /api/recording/:id` - Delete own recording
 
 ### Validation
-- `GET /api/validation` - Get recording to validate
+- `GET /api/validation?corpus_id=` - Get recording to validate (corpus filter optional)
 - `POST /api/validation` - Submit validation score
 - `GET /api/validation/stats` - Get validation statistics
+- `GET /api/validation/flagged` - Flagged recordings for review (admin)
 
 ### User Data & GDPR
 - `GET /api/me/recordings` - Get own recordings
@@ -129,20 +138,25 @@ The app will be available at http://localhost:5173
 ### Admin
 - `GET /api/admin/stats` - Platform statistics (users, recordings, disk space)
 - `GET /api/admin/users` - List all users
-- `PUT /api/admin/users/:id` - Update user role
-- `DELETE /api/admin/users/:id` - Delete user account
+- `GET /api/admin/users/:id` - Get single user details
+- `PUT /api/admin/users/:id/role` - Update user role (`{"role": "user"|"admin"}`)
+- `DELETE /api/admin/users/:id` - Delete user account and their data
 
 ### Export (Admin)
-- `GET /api/export?corpus_id=&format=csv|json` - Export dataset
-- `GET /api/export/stats` - Export statistics per corpus
+- `GET /api/export?corpus_id=&format=csv|json&include_all=` - Export dataset
+- `GET /api/export/stats?corpus_id=` - Export statistics per corpus
 - `GET /api/export/manifest?corpus_id=` - Get file manifest for export
+
+### Misc
+- `GET /api/health` - Health check (no auth)
+- `GET /api/disk-space` - Disk space status (admin)
 
 ## Corpus File Formats
 
 ### Text Corpora
-- `.txt` - Plain text, split by sentences
-- `.json` - Array of strings or objects with `text` field
-- `.csv` - One text per line
+- `.txt` - Plain text, split by sentences (long sentences are chunked at ~15 words; sentences under 2 words are dropped)
+- `.json` - Array of strings, array of objects with a `text`/`content`/`prompt` field, or an object with an `items`/`prompts`/`data` array
+- `.csv` - One text per line (a `text`/`prompt`/`content` header row is skipped)
 
 ### Music Corpora
 - `.abc` - ABC notation, split by tune (X: headers)
@@ -152,8 +166,8 @@ The app will be available at http://localhost:5173
 
 ### Recording Requirements
 Before submission, recordings are analyzed for:
-- **Duration**: Must be between 0.5 and 120 seconds
-- **Silence ratio**: Must be less than 80% silence
+- **Duration**: Must be between 0.5 and 30 seconds
+- **Silence ratio**: Must be less than 70% silence
 - **Audio level**: Peak amplitude is measured for quality feedback
 
 ### Validation Thresholds

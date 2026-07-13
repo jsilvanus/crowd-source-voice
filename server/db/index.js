@@ -22,4 +22,24 @@ pool.on('error', (err) => {
 
 export const query = (text, params) => pool.query(text, params);
 
+/**
+ * Run a set of queries inside a single transaction.
+ * The callback receives a dedicated client; use client.query(...) for
+ * every statement that must be atomic.
+ */
+export async function withTransaction(fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export default pool;

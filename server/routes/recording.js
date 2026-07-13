@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { query } from '../db/index.js';
 import { authenticate } from '../middleware/auth.js';
 import { checkDiskSpace } from '../middleware/diskSpace.js';
+import { parseId } from '../utils/params.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,10 +43,15 @@ const upload = multer({
 // POST /recording - Upload a new recording
 router.post('/', authenticate, checkDiskSpace, upload.single('audio'), async (req, res, next) => {
   try {
-    const { prompt_id, duration } = req.body;
+    const prompt_id = parseId(req.body.prompt_id);
+    const { duration } = req.body;
 
     if (!prompt_id) {
-      return res.status(400).json({ error: 'prompt_id is required' });
+      // Clean up the already-saved upload before rejecting
+      if (req.file) {
+        await fs.unlink(req.file.path).catch(() => {});
+      }
+      return res.status(400).json({ error: 'A valid prompt_id is required' });
     }
 
     if (!req.file) {
@@ -95,7 +101,10 @@ router.post('/', authenticate, checkDiskSpace, upload.single('audio'), async (re
 // GET /recording/:id - Get a specific recording
 router.get('/:id', authenticate, async (req, res, next) => {
   try {
-    const recordingId = parseInt(req.params.id);
+    const recordingId = parseId(req.params.id);
+    if (!recordingId) {
+      return res.status(400).json({ error: 'Invalid recording id' });
+    }
 
     const result = await query(`
       SELECT r.*, p.text as prompt_text, p.type as prompt_type
@@ -117,7 +126,10 @@ router.get('/:id', authenticate, async (req, res, next) => {
 // DELETE /recording/:id - Delete own recording
 router.delete('/:id', authenticate, async (req, res, next) => {
   try {
-    const recordingId = parseInt(req.params.id);
+    const recordingId = parseId(req.params.id);
+    if (!recordingId) {
+      return res.status(400).json({ error: 'Invalid recording id' });
+    }
 
     // Check ownership
     const recordingResult = await query(

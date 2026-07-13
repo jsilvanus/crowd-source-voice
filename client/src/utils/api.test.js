@@ -117,29 +117,41 @@ describe('API Client', () => {
   });
 
   describe('upload', () => {
-    test('makes POST request with FormData', async () => {
-      global.fetch.mockResolvedValueOnce({
-        ok: true,
-        headers: new Headers({ 'content-type': 'application/json' }),
-        json: () => Promise.resolve({ id: 1 })
-      });
-
-      const formData = new FormData();
-      formData.append('file', new Blob(['test']));
-
-      await api.upload('/upload', formData);
-
-      expect(global.fetch).toHaveBeenCalledWith(
-        '/api/upload',
-        expect.objectContaining({
-          method: 'POST',
-          body: formData
+    test('makes POST request with FormData via XHR', async () => {
+      const listeners = {};
+      const xhrMock = {
+        status: 0,
+        responseText: '',
+        open: vi.fn(),
+        setRequestHeader: vi.fn(),
+        addEventListener: vi.fn((event, cb) => {
+          listeners[event] = cb;
+        }),
+        upload: { addEventListener: vi.fn() },
+        send: vi.fn(() => {
+          xhrMock.status = 200;
+          xhrMock.responseText = JSON.stringify({ id: 1 });
+          listeners.load();
         })
-      );
+      };
+      vi.stubGlobal('XMLHttpRequest', vi.fn(() => xhrMock));
 
-      // Should not set Content-Type for FormData (browser sets it with boundary)
-      const callArgs = global.fetch.mock.calls[0][1];
-      expect(callArgs.headers['Content-Type']).toBeUndefined();
+      try {
+        localStorage.setItem('token', 'test-token');
+        const formData = new FormData();
+        formData.append('file', new Blob(['test']));
+
+        const result = await api.upload('/upload', formData);
+
+        expect(xhrMock.open).toHaveBeenCalledWith('POST', '/api/upload');
+        expect(xhrMock.setRequestHeader).toHaveBeenCalledWith('Authorization', 'Bearer test-token');
+        // Content-Type is left to the browser so it can add the boundary
+        expect(xhrMock.setRequestHeader).not.toHaveBeenCalledWith('Content-Type', expect.anything());
+        expect(xhrMock.send).toHaveBeenCalledWith(formData);
+        expect(result.data).toEqual({ id: 1 });
+      } finally {
+        vi.unstubAllGlobals();
+      }
     });
   });
 

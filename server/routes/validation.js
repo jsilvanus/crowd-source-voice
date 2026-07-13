@@ -1,7 +1,8 @@
 import express from 'express';
 import { body, validationResult } from 'express-validator';
 import { query } from '../db/index.js';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, requireAdmin } from '../middleware/auth.js';
+import { parseId } from '../utils/params.js';
 
 const router = express.Router();
 
@@ -34,7 +35,7 @@ router.get('/', authenticate, async (req, res, next) => {
       FROM recordings r
       JOIN prompts p ON r.prompt_id = p.id
       JOIN corpora c ON p.corpus_id = c.id
-      WHERE r.user_id != $1
+      WHERE r.user_id IS DISTINCT FROM $1
         AND r.id NOT IN (
           SELECT recording_id FROM validations WHERE validator_id = $1
         )
@@ -42,9 +43,13 @@ router.get('/', authenticate, async (req, res, next) => {
 
     const params = [req.user.id];
 
-    if (corpusId) {
+    if (corpusId !== undefined) {
+      const parsedCorpusId = parseId(corpusId);
+      if (!parsedCorpusId) {
+        return res.status(400).json({ error: 'Invalid corpus_id' });
+      }
       queryText += ` AND c.id = $2`;
-      params.push(corpusId);
+      params.push(parsedCorpusId);
     }
 
     queryText += `
@@ -105,11 +110,18 @@ router.post('/', authenticate, [
       return res.status(400).json({ error: 'You have already validated this recording' });
     }
 
-    // Insert validation
-    await query(
-      'INSERT INTO validations (recording_id, validator_id, score) VALUES ($1, $2, $3)',
-      [recording_id, req.user.id, score]
-    );
+    // Insert validation (unique constraint guards against duplicate races)
+    try {
+      await query(
+        'INSERT INTO validations (recording_id, validator_id, score) VALUES ($1, $2, $3)',
+        [recording_id, req.user.id, score]
+      );
+    } catch (error) {
+      if (error.code === '23505') {
+        return res.status(400).json({ error: 'You have already validated this recording' });
+      }
+      throw error;
+    }
 
     // Update recording quality_score (average of all validations)
     await query(`
@@ -154,7 +166,7 @@ router.get('/stats', authenticate, async (req, res, next) => {
 });
 
 // GET /validation/flagged - Get flagged recordings for admin review
-router.get('/flagged', authenticate, async (req, res, next) => {
+router.get('/flagged', authenticate, requireAdmin, async (req, res, next) => {
   try {
     const result = await query(`
       SELECT
