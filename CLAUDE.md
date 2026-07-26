@@ -39,6 +39,7 @@ Backend tests need no database — they mock `db/index.js` via `jest.unstable_mo
 - `db/index.js` — pg `Pool`, plain `query()`, and `withTransaction(fn)` which hands the callback a dedicated client inside BEGIN/COMMIT/ROLLBACK. Use it for any multi-statement mutation (account deletion, corpus prompt replacement).
 - `utils/corpusSplitter.js` — pure functions that split uploaded corpus files (txt/json/csv/abc) into prompts; well covered by tests, keep it side-effect free.
 - `utils/params.js` — `parseId()` for route/query IDs; return 400 on `null` instead of letting Postgres throw on malformed input.
+- `utils/speakerId.js` — `computeSpeakerId(email, salt = SPEAKER_ID_SALT)`: salted double SHA-256 hash, used by `routes/export.js` to give `format=json` export/manifest rows a stable, non-reversible per-contributor `speaker_id` for downstream speaker-disjoint dataset splitting, without exposing or storing email in the export. Set `SPEAKER_ID_SALT` in production — `index.js` warns at startup if it's unset.
 
 ### Data model (see `server/db/migrate.js`)
 

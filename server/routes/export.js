@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { query } from '../db/index.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { parseId } from '../utils/params.js';
+import { computeSpeakerId } from '../utils/speakerId.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -43,9 +44,11 @@ router.get('/', authenticate, requireAdmin, async (req, res, next) => {
         r.quality_score,
         p.text,
         p.type,
+        u.email AS user_email,
         (SELECT COUNT(*) FROM validations WHERE recording_id = r.id) as validation_count
       FROM recordings r
       JOIN prompts p ON r.prompt_id = p.id
+      LEFT JOIN users u ON u.id = r.user_id
       WHERE p.corpus_id = $1
     `;
 
@@ -68,7 +71,12 @@ router.get('/', authenticate, requireAdmin, async (req, res, next) => {
       return res.status(404).json({ error: 'No recordings found for export' });
     }
 
-    // Format the export data
+    // Format the export data.
+    // speaker_id is a salted double-hash of the contributor's email (never the
+    // email itself) — present on JSON rows so downstream training pipelines can
+    // do a speaker-disjoint split. Deliberately left out of the CSV format,
+    // which stays the exact `file,text,duration,quality_score` Whisper-compatible
+    // shape existing external consumers expect.
     const exportData = result.rows.map((row, index) => {
       const filename = `${String(index + 1).padStart(4, '0')}.wav`;
       return {
@@ -78,7 +86,8 @@ router.get('/', authenticate, requireAdmin, async (req, res, next) => {
         notation: corpus.type === 'music' ? row.text : undefined,
         duration: row.duration,
         quality_score: row.quality_score,
-        validation_count: parseInt(row.validation_count)
+        validation_count: parseInt(row.validation_count),
+        speaker_id: computeSpeakerId(row.user_email)
       };
     });
 
@@ -133,9 +142,11 @@ router.get('/manifest', authenticate, requireAdmin, async (req, res, next) => {
       SELECT
         r.id,
         r.file_path,
-        p.text
+        p.text,
+        u.email AS user_email
       FROM recordings r
       JOIN prompts p ON r.prompt_id = p.id
+      LEFT JOIN users u ON u.id = r.user_id
       WHERE p.corpus_id = $1
         AND r.quality_score >= $2
         AND (SELECT COUNT(*) FROM validations WHERE recording_id = r.id) >= $3
@@ -148,7 +159,8 @@ router.get('/manifest', authenticate, requireAdmin, async (req, res, next) => {
         id: row.id,
         source_path: row.file_path,
         export_name: `${String(index + 1).padStart(4, '0')}.wav`,
-        text: row.text
+        text: row.text,
+        speaker_id: computeSpeakerId(row.user_email)
       }))
     });
   } catch (error) {

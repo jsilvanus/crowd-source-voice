@@ -25,6 +25,10 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+if (!process.env.SPEAKER_ID_SALT) {
+  console.warn('SPEAKER_ID_SALT is not set — exported speaker_id values will be derived from email hashes without a secret salt, which weakens the anonymization guarantee. Set SPEAKER_ID_SALT in production.');
+}
+
 // Middleware
 app.use(cors({
   origin: process.env.CLIENT_URL || 'http://localhost:5173',
