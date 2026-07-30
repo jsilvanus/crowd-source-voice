@@ -143,9 +143,14 @@ The app will be available at http://localhost:5173
 - `DELETE /api/admin/users/:id` - Delete user account and their data
 
 ### Export (Admin)
-- `GET /api/export?corpus_id=&format=csv|json&include_all=` - Export dataset
+- `GET /api/export?corpus_id=&format=csv|json&include_all=` - Export dataset. `format=json` rows include a
+  `speaker_id` field — a salted, one-way hash of the contributor's email (never the email itself, see
+  `server/utils/speakerId.js`), for speaker-disjoint dataset splitting downstream. `null` when the
+  recording's contributor account was deleted/anonymized. The CSV format is unchanged
+  (`file,text,duration,quality_score` / `file,notation,duration,quality_score`) to stay Whisper-compatible
+  for existing consumers.
 - `GET /api/export/stats?corpus_id=` - Export statistics per corpus
-- `GET /api/export/manifest?corpus_id=` - Get file manifest for export
+- `GET /api/export/manifest?corpus_id=` - Get file manifest for export (also includes `speaker_id`)
 
 ### Misc
 - `GET /api/health` - Health check (no auth)
