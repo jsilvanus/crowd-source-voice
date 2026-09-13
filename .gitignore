@@ -9,6 +9,8 @@ data/
 .env
 .env.local
 .env.*.local
+.env.staging
+.env.prod
 
 # Build outputs
 client/dist/

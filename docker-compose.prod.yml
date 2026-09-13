@@ -1,0 +1,38 @@
+# Prod: dockerized app only. Postgres, Traefik and Prometheus are external —
+# this file never runs them. The app joins the externally-managed Traefik
+# network and is discovered via labels; Traefik itself lives outside this repo.
+#
+# Usage (note --env-file: it's needed both for the app's runtime env AND for
+# interpolating ${IMAGE_TAG}/${APP_DOMAIN}/${TRAEFIK_CERTRESOLVER} below — an
+# env_file: entry alone only covers the former):
+#   docker login ghcr.io                                                # once per host
+#   cp .env.prod.example .env.prod && vi .env.prod                      # fill in real values, add IMAGE_TAG=1.2.3
+#   docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
+#   docker compose --env-file .env.prod -f docker-compose.prod.yml exec app npm run db:migrate
+
+services:
+  app:
+    image: ghcr.io/jsilvanus/crowd-source-voice:${IMAGE_TAG:?set IMAGE_TAG to a pinned release, e.g. 1.2.3 -- never "latest"}
+    container_name: crowd-source-voice-app
+    restart: unless-stopped
+    env_file:
+      - .env.prod
+    environment:
+      NODE_ENV: production
+    networks:
+      - traefik-public
+    labels:
+      traefik.enable: 'true'
+      traefik.docker.network: traefik-public
+      traefik.http.routers.crowd-source-voice.rule: Host(`${APP_DOMAIN:?set APP_DOMAIN, e.g. voice.example.org}`)
+      traefik.http.routers.crowd-source-voice.entrypoints: websecure
+      traefik.http.routers.crowd-source-voice.tls.certresolver: ${TRAEFIK_CERTRESOLVER:-letsencrypt}
+      traefik.http.services.crowd-source-voice.loadbalancer.server.port: '3001'
+      # /metrics is intentionally NOT exposed through this router. Point
+      # Prometheus at the container directly over the internal Docker
+      # network (or a separate internal-only Traefik entrypoint) instead of
+      # adding a public route for it here.
+
+networks:
+  traefik-public:
+    external: true

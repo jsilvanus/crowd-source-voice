@@ -1,12 +1,7 @@
 import express from 'express';
-import path from 'path';
-import fs from 'fs/promises';
-import { fileURLToPath } from 'url';
 import { query, withTransaction } from '../db/index.js';
 import { authenticate } from '../middleware/auth.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { deleteStoredFile, attachFileUrls } from '../utils/storage.js';
 
 const router = express.Router();
 
@@ -32,7 +27,7 @@ router.get('/recordings', authenticate, async (req, res, next) => {
     // NOTE: quality_score is returned but UI should not show individual scores
     // to prevent gaming the system
 
-    res.json(result.rows);
+    res.json(await attachFileUrls(result.rows));
   } catch (error) {
     next(error);
   }
@@ -196,10 +191,7 @@ router.delete('/', authenticate, async (req, res, next) => {
     // Delete audio files (after the DB commit, so a DB failure
     // can't leave recordings pointing at missing files)
     for (const recording of recordings) {
-      const filePath = path.join(__dirname, '../..', recording.file_path);
-      await fs.unlink(filePath).catch(() => {
-        // File might not exist, that's okay
-      });
+      await deleteStoredFile(recording.file_path);
     }
 
     res.json({ message: 'Account and all associated data deleted successfully' });

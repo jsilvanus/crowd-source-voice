@@ -1,0 +1,47 @@
+# Staging: dockerized app + dockerized Postgres.
+# The image is pulled from GHCR (built by .github/workflows/docker-publish.yml),
+# not built locally — bump IMAGE_TAG deliberately to deploy a new build.
+#
+# Usage (note --env-file: it's needed both for the app's runtime env AND for
+# interpolating ${IMAGE_TAG}/${POSTGRES_PASSWORD}/${APP_PORT} below — an
+# env_file: entry alone only covers the former):
+#   docker login ghcr.io                                                    # once per host (GHCR packages are private by default)
+#   cp .env.staging.example .env.staging && vi .env.staging                 # fill in real values, add IMAGE_TAG=sha-xxxxxxx
+#   docker compose --env-file .env.staging -f docker-compose.staging.yml up -d
+#   docker compose --env-file .env.staging -f docker-compose.staging.yml exec app npm run db:migrate
+#   docker compose --env-file .env.staging -f docker-compose.staging.yml exec app npm run db:seed
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: crowd-source-voice-staging-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: crowdsourcer
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.staging}
+      POSTGRES_DB: crowd_source_voice_db
+    volumes:
+      - staging_db_data:/var/lib/postgresql/data
+    networks:
+      - staging
+
+  app:
+    image: ghcr.io/jsilvanus/crowd-source-voice:${IMAGE_TAG:?set IMAGE_TAG (e.g. sha-abc1234) to the build you want to deploy}
+    container_name: crowd-source-voice-staging-app
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    env_file:
+      - .env.staging
+    environment:
+      NODE_ENV: production
+    ports:
+      - '${APP_PORT:-3001}:3001'
+    networks:
+      - staging
+
+networks:
+  staging:
+
+volumes:
+  staging_db_data:

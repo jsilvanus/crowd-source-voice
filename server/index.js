@@ -7,6 +7,7 @@ import cors from 'cors';
 import path from 'path';
 import multer from 'multer';
 import { fileURLToPath } from 'url';
+import pinoHttp from 'pino-http';
 
 import authRoutes from './routes/auth.js';
 import corpusRoutes from './routes/corpus.js';
@@ -18,6 +19,9 @@ import exportRoutes from './routes/export.js';
 import adminRoutes from './routes/admin.js';
 import { getDiskSpaceStatus } from './middleware/diskSpace.js';
 import { authenticate, requireAdmin } from './middleware/auth.js';
+import logger from './utils/logger.js';
+import metricsRegister from './utils/metrics.js';
+import { metricsMiddleware } from './middleware/metrics.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,8 +30,21 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 if (!process.env.SPEAKER_ID_SALT) {
-  console.warn('SPEAKER_ID_SALT is not set — exported speaker_id values will be derived from email hashes without a secret salt, which weakens the anonymization guarantee. Set SPEAKER_ID_SALT in production.');
+  logger.warn('SPEAKER_ID_SALT is not set — exported speaker_id values will be derived from email hashes without a secret salt, which weakens the anonymization guarantee. Set SPEAKER_ID_SALT in production.');
 }
+
+// Request logging. Only method/url/status/duration and the authenticated
+// user's id (never email/headers/body) are logged — see utils/logger.js.
+app.use(pinoHttp({
+  logger,
+  serializers: {
+    req: (req) => ({ method: req.method, url: req.url }),
+    res: (res) => ({ statusCode: res.statusCode })
+  },
+  customProps: (req) => (req.user ? { userId: req.user.id } : {})
+}));
+
+app.use(metricsMiddleware);
 
 // Middleware
 app.use(cors({
@@ -58,6 +75,18 @@ app.get('/api/health', (req, res) => {
 // Disk space status (admin only)
 app.get('/api/disk-space', authenticate, requireAdmin, getDiskSpaceStatus);
 
+// Prometheus metrics. Unauthenticated (scrapers don't carry a JWT) — keep
+// this endpoint off any public router; expose it only on an internal
+// network/Traefik entrypoint reachable by Prometheus.
+app.get('/metrics', async (req, res, next) => {
+  try {
+    res.set('Content-Type', metricsRegister.contentType);
+    res.send(await metricsRegister.metrics());
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../client/dist')));
@@ -69,7 +98,7 @@ if (process.env.NODE_ENV === 'production') {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Error:', err);
+  (req.log || logger).error({ err });
 
   // Upload errors are client errors, not server errors
   if (err instanceof multer.MulterError) {
@@ -86,7 +115,7 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  logger.info(`Server running on port ${PORT}`);
 });
 
 export default app;
