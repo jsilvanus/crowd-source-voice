@@ -1,36 +1,18 @@
 import express from 'express';
-import multer from 'multer';
 import path from 'path';
-import fs from 'fs/promises';
-import { fileURLToPath } from 'url';
 import { body, validationResult } from 'express-validator';
 import { query, withTransaction } from '../db/index.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { splitCorpus, detectFormat } from '../utils/corpusSplitter.js';
 import { checkDiskSpace } from '../middleware/diskSpace.js';
 import { parseId } from '../utils/params.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { createUploadMiddleware, deleteStoredFile, readStoredFile } from '../utils/storage.js';
 
 const router = express.Router();
 
-// Configure multer for corpus file uploads
-const storage = multer.diskStorage({
-  destination: async (req, file, cb) => {
-    const uploadDir = path.join(__dirname, '../../uploads/corpora');
-    await fs.mkdir(uploadDir, { recursive: true });
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + '-' + file.originalname);
-  }
-});
-
-const upload = multer({
-  storage,
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit
+const upload = createUploadMiddleware({
+  subdir: 'corpora',
+  maxFileSize: 50 * 1024 * 1024, // 50MB limit
   fileFilter: (req, file, cb) => {
     const allowedExtensions = ['.txt', '.json', '.csv', '.abc'];
     const ext = path.extname(file.originalname).toLowerCase();
@@ -89,7 +71,7 @@ router.post('/:id/upload', authenticate, requireAdmin, checkDiskSpace, upload.si
     }
 
     // Read and process the file
-    const content = await fs.readFile(req.file.path, 'utf-8');
+    const content = await readStoredFile(req.file.storageKey);
     const format = detectFormat(req.file.originalname, content);
     const prompts = splitCorpus(content, corpus.type, format);
 
@@ -112,7 +94,7 @@ router.post('/:id/upload', authenticate, requireAdmin, checkDiskSpace, upload.si
     });
 
     // Clean up uploaded file (content is now in database)
-    await fs.unlink(req.file.path);
+    await deleteStoredFile(req.file.storageKey);
 
     res.json({
       message: 'Corpus file processed and stored in database',
@@ -284,8 +266,7 @@ router.post('/:id/reprocess', authenticate, requireAdmin, async (req, res, next)
 
     // Remove audio files of the cascade-deleted recordings
     for (const row of staleFiles) {
-      const filePath = path.join(__dirname, '../..', row.file_path);
-      await fs.unlink(filePath).catch(() => {});
+      await deleteStoredFile(row.file_path);
     }
 
     res.json({
@@ -321,8 +302,7 @@ router.delete('/:id', authenticate, requireAdmin, async (req, res, next) => {
 
     // Remove audio files of the deleted recordings
     for (const row of filesResult.rows) {
-      const filePath = path.join(__dirname, '../..', row.file_path);
-      await fs.unlink(filePath).catch(() => {});
+      await deleteStoredFile(row.file_path);
     }
 
     res.json({ message: 'Corpus deleted successfully' });

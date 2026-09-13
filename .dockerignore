@@ -1,0 +1,14 @@
+node_modules
+client/node_modules
+client/dist
+.git
+data
+uploads/audio/*
+uploads/corpora/*
+!uploads/audio/.gitkeep
+!uploads/corpora/.gitkeep
+.env
+.env.*
+!.env.example
+coverage
+*.log

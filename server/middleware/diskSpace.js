@@ -1,6 +1,8 @@
 import { statfs } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import logger from '../utils/logger.js';
+import { isS3Driver } from '../utils/storage.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,6 +39,11 @@ export async function getDiskSpace() {
  * Rejects requests if free space is below threshold
  */
 export function checkDiskSpace(req, res, next) {
+  // Uploads go straight to S3 in that mode — local disk space is irrelevant.
+  if (isS3Driver()) {
+    return next();
+  }
+
   getDiskSpace()
     .then(space => {
       if (space.available < MIN_FREE_SPACE_BYTES) {
@@ -53,7 +60,7 @@ export function checkDiskSpace(req, res, next) {
       next();
     })
     .catch(error => {
-      console.error('Disk space check failed:', error);
+      logger.error({ err: error }, 'Disk space check failed');
       // Allow request to proceed if check fails (fail open)
       next();
     });
@@ -63,6 +70,10 @@ export function checkDiskSpace(req, res, next) {
  * API endpoint to get current disk space status
  */
 export async function getDiskSpaceStatus(req, res) {
+  if (isS3Driver()) {
+    return res.json({ applicable: false, reason: 'STORAGE_DRIVER=s3 — files are stored in S3, not on local disk' });
+  }
+
   try {
     const space = await getDiskSpace();
     const availableMB = Math.round(space.available / (1024 * 1024));

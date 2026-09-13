@@ -3,6 +3,7 @@ import { body, validationResult } from 'express-validator';
 import { query } from '../db/index.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { parseId } from '../utils/params.js';
+import { attachFileUrl, attachFileUrls } from '../utils/storage.js';
 
 const router = express.Router();
 
@@ -66,7 +67,7 @@ router.get('/', authenticate, async (req, res, next) => {
       });
     }
 
-    res.json({ recording: result.rows[0] });
+    res.json({ recording: await attachFileUrl(result.rows[0]) });
   } catch (error) {
     next(error);
   }
@@ -187,7 +188,7 @@ router.get('/flagged', authenticate, requireAdmin, async (req, res, next) => {
       ORDER BY r.quality_score ASC
     `, [MIN_SCORE_THRESHOLD]);
 
-    res.json(result.rows);
+    res.json(await attachFileUrls(result.rows));
   } catch (error) {
     next(error);
   }

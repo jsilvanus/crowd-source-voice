@@ -1,35 +1,15 @@
 import express from 'express';
-import multer from 'multer';
-import path from 'path';
-import fs from 'fs/promises';
-import { fileURLToPath } from 'url';
-import { v4 as uuidv4 } from 'uuid';
 import { query } from '../db/index.js';
 import { authenticate } from '../middleware/auth.js';
 import { checkDiskSpace } from '../middleware/diskSpace.js';
 import { parseId } from '../utils/params.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { createUploadMiddleware, deleteStoredFile, attachFileUrl } from '../utils/storage.js';
 
 const router = express.Router();
 
-// Configure multer for audio file uploads
-const storage = multer.diskStorage({
-  destination: async (req, file, cb) => {
-    const uploadDir = path.join(__dirname, '../../uploads/audio');
-    await fs.mkdir(uploadDir, { recursive: true });
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || '.wav';
-    cb(null, `${uuidv4()}${ext}`);
-  }
-});
-
-const upload = multer({
-  storage,
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB limit
+const upload = createUploadMiddleware({
+  subdir: 'audio',
+  maxFileSize: 20 * 1024 * 1024, // 20MB limit
   fileFilter: (req, file, cb) => {
     const allowedMimeTypes = ['audio/wav', 'audio/wave', 'audio/x-wav', 'audio/webm', 'audio/ogg'];
     if (allowedMimeTypes.includes(file.mimetype) || file.originalname.endsWith('.wav')) {
@@ -49,7 +29,7 @@ router.post('/', authenticate, checkDiskSpace, upload.single('audio'), async (re
     if (!prompt_id) {
       // Clean up the already-saved upload before rejecting
       if (req.file) {
-        await fs.unlink(req.file.path).catch(() => {});
+        await deleteStoredFile(req.file.storageKey);
       }
       return res.status(400).json({ error: 'A valid prompt_id is required' });
     }
@@ -62,7 +42,7 @@ router.post('/', authenticate, checkDiskSpace, upload.single('audio'), async (re
     const promptResult = await query('SELECT id FROM prompts WHERE id = $1', [prompt_id]);
     if (promptResult.rows.length === 0) {
       // Clean up uploaded file
-      await fs.unlink(req.file.path);
+      await deleteStoredFile(req.file.storageKey);
       return res.status(404).json({ error: 'Prompt not found' });
     }
 
@@ -73,26 +53,23 @@ router.post('/', authenticate, checkDiskSpace, upload.single('audio'), async (re
     );
     if (existingResult.rows.length > 0) {
       // Clean up uploaded file
-      await fs.unlink(req.file.path);
+      await deleteStoredFile(req.file.storageKey);
       return res.status(400).json({ error: 'You have already recorded this prompt' });
     }
-
-    // Store relative path for the file
-    const filePath = `/uploads/audio/${req.file.filename}`;
 
     // Insert recording
     const result = await query(
       `INSERT INTO recordings (prompt_id, user_id, file_path, duration)
        VALUES ($1, $2, $3, $4)
        RETURNING *`,
-      [prompt_id, req.user.id, filePath, duration || null]
+      [prompt_id, req.user.id, req.file.storageKey, duration || null]
     );
 
-    res.status(201).json(result.rows[0]);
+    res.status(201).json(await attachFileUrl(result.rows[0]));
   } catch (error) {
     // Clean up file on error
     if (req.file) {
-      await fs.unlink(req.file.path).catch(() => {});
+      await deleteStoredFile(req.file.storageKey);
     }
     next(error);
   }
@@ -117,7 +94,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
       return res.status(404).json({ error: 'Recording not found' });
     }
 
-    res.json(result.rows[0]);
+    res.json(await attachFileUrl(result.rows[0]));
   } catch (error) {
     next(error);
   }
@@ -144,8 +121,7 @@ router.delete('/:id', authenticate, async (req, res, next) => {
     const recording = recordingResult.rows[0];
 
     // Delete the file
-    const filePath = path.join(__dirname, '../..', recording.file_path);
-    await fs.unlink(filePath).catch(() => {});
+    await deleteStoredFile(recording.file_path);
 
     // Delete from database
     await query('DELETE FROM recordings WHERE id = $1', [recordingId]);

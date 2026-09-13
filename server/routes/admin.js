@@ -1,14 +1,9 @@
 import express from 'express';
-import path from 'path';
-import fs from 'fs/promises';
-import { fileURLToPath } from 'url';
 import { query, withTransaction } from '../db/index.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { getDiskSpace } from '../middleware/diskSpace.js';
 import { parseId } from '../utils/params.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { deleteStoredFile } from '../utils/storage.js';
 
 const router = express.Router();
 
@@ -201,8 +196,7 @@ router.delete('/users/:id', async (req, res, next) => {
 
     // Delete audio files after the DB commit
     for (const recording of recordings) {
-      const filePath = path.join(__dirname, '../..', recording.file_path);
-      await fs.unlink(filePath).catch(() => {});
+      await deleteStoredFile(recording.file_path);
     }
 
     res.json({

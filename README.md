@@ -76,6 +76,8 @@ docker compose up -d
 ```
 The bundled `docker-compose.yml` exposes PostgreSQL on host port **7005** with user `crowdsourcer` and database `crowd_source_voice_db`; the defaults in `.env.example` match it. If you run your own PostgreSQL, adjust `DATABASE_URL` accordingly.
 
+For staging/prod (dockerized app, S3 file storage, Traefik/Prometheus integration), see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+
 5. Run migrations:
 ```bash
 npm run db:migrate
