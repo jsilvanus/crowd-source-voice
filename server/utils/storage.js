@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import { createReadStream } from 'fs';
 import path from 'path';
+import { Readable } from 'stream';
 import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
@@ -172,6 +173,109 @@ export async function readStoredFile(storageKey) {
   return fs.readFile(path.join(UPLOADS_ROOT, storageKey), 'utf-8');
 }
 
+const LEGACY_KEY_PREFIX = '/uploads/';
+
+function storageError(code, message) {
+  return Object.assign(new Error(message), { code });
+}
+
+/**
+ * Maps a stored key to an absolute path inside the uploads root, or returns null
+ * when the key is not a safe relative path: empty, containing a NUL byte,
+ * absolute (POSIX, Windows drive or UNC), or resolving outside the root
+ * (`..` segments). A legacy leading `/uploads/` (rows written before storage
+ * keys existed) is stripped first. `root` is a parameter for tests only.
+ */
+export function resolveUploadPath(storageKey, root = UPLOADS_ROOT) {
+  if (typeof storageKey !== 'string' || storageKey === '' || storageKey.includes('\0')) {
+    return null;
+  }
+
+  const key = storageKey.startsWith(LEGACY_KEY_PREFIX)
+    ? storageKey.slice(LEGACY_KEY_PREFIX.length)
+    : storageKey;
+  if (key === '' || path.posix.isAbsolute(key) || path.win32.isAbsolute(key)) {
+    return null;
+  }
+
+  const rootDir = path.resolve(root);
+  const resolved = path.resolve(rootDir, key);
+  const relative = path.relative(rootDir, resolved);
+  if (
+    relative === '' ||
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    return null;
+  }
+  return resolved;
+}
+
+async function openLocalStream(filePath) {
+  let handle;
+  try {
+    handle = await fs.open(filePath, 'r');
+    const stats = await handle.stat();
+    if (!stats.isFile()) {
+      throw storageError('STORAGE_NOT_FOUND', 'Stored file not found');
+    }
+    // The stream owns the descriptor: autoClose releases it when the stream
+    // ends, errors or is destroyed (e.g. the client hung up).
+    return { stream: handle.createReadStream(), contentLength: stats.size };
+  } catch (err) {
+    await handle?.close().catch(() => {});
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR' || err.code === 'EISDIR') {
+      throw storageError('STORAGE_NOT_FOUND', 'Stored file not found');
+    }
+    throw err;
+  }
+}
+
+/**
+ * Opens a stored file for streaming to a client, whichever driver is active.
+ * Resolves `{ stream, contentLength }` where `stream` is a Node Readable the
+ * caller must consume or destroy, and `contentLength` is undefined when unknown.
+ *
+ * Rejects with `err.code === 'STORAGE_NOT_FOUND'` when the file does not exist
+ * (local ENOENT or S3 NoSuchKey) and `'INVALID_STORAGE_KEY'` when a local key
+ * would resolve outside the uploads root. Any other error is unexpected and
+ * may carry paths or bucket names in its message: do not send it to clients.
+ *
+ * Legacy `/uploads/...` keys always live on local disk (as with getFileUrl,
+ * nothing was ever written to the bucket for them), so they are read from the
+ * uploads root under either driver.
+ */
+export async function getFileStream(storageKey) {
+  if (!storageKey) {
+    throw storageError('STORAGE_NOT_FOUND', 'Stored file not found');
+  }
+
+  if (DRIVER === 's3' && !storageKey.startsWith(LEGACY_KEY_PREFIX)) {
+    try {
+      const response = await getS3Client().send(
+        new GetObjectCommand({ Bucket: getBucket(), Key: storageKey })
+      );
+      const body = response.Body;
+      return {
+        stream: typeof body.pipe === 'function' ? body : Readable.fromWeb(body),
+        contentLength: typeof response.ContentLength === 'number' ? response.ContentLength : undefined
+      };
+    } catch (err) {
+      if (err?.name === 'NoSuchKey') {
+        throw storageError('STORAGE_NOT_FOUND', 'Stored file not found');
+      }
+      throw err;
+    }
+  }
+
+  const filePath = resolveUploadPath(storageKey);
+  if (!filePath) {
+    throw storageError('INVALID_STORAGE_KEY', 'Invalid storage key');
+  }
+  return openLocalStream(filePath);
+}
+
 /**
  * Reads just the first `length` bytes of a stored file — enough to check a
  * magic-byte signature without buffering or re-reading the whole upload.
@@ -279,6 +383,7 @@ export default {
   createUploadMiddleware,
   deleteStoredFile,
   readStoredFile,
+  getFileStream,
   readMagicBytes,
   isValidAudioSignature,
   safeAudioExtension,
