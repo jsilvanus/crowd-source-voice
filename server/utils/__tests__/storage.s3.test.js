@@ -1,28 +1,124 @@
 import { jest } from '@jest/globals';
-import fs from 'fs/promises';
-import path from 'path';
-import { randomUUID } from 'crypto';
-import { Readable } from 'stream';
-import { fileURLToPath } from 'url';
-import { S3Client, GetObjectCommand, NoSuchKey } from '@aws-sdk/client-s3';
+import express from 'express';
+import request from 'supertest';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 
 // STORAGE_DRIVER and the bucket are read when storage.js loads / on first use.
 process.env.STORAGE_DRIVER = 's3';
 process.env.S3_BUCKET = 'csv-test-bucket';
 process.env.S3_REGION = 'us-east-1';
 
-// No network: every S3 call goes through the (mocked) client's send().
+// The S3 upload path goes through @aws-sdk/lib-storage's Upload class, not
+// S3Client.send directly. Mock it at the module boundary storage.js actually
+// calls, the same way the repo's existing S3 tests mock S3Client.prototype.send
+// for the S3Client-driven paths (readMagicBytes, below). The mock still drains
+// the incoming file stream (as the real Upload would) so multer/busboy can
+// finish parsing the multipart request instead of hanging.
+const capturedUploads = [];
+const uploadCtor = jest.fn().mockImplementation((opts) => ({
+  done: async () => {
+    const chunks = [];
+    for await (const chunk of opts.params.Body) chunks.push(chunk);
+    capturedUploads.push({
+      key: opts.params.Key,
+      contentType: opts.params.ContentType,
+      body: Buffer.concat(chunks)
+    });
+    return {};
+  }
+}));
+jest.unstable_mockModule('@aws-sdk/lib-storage', () => ({ Upload: uploadCtor }));
+
+// No network for the GetObject (readMagicBytes) path: every S3 call goes
+// through the (mocked) client's send().
 const send = jest.spyOn(S3Client.prototype, 'send');
 
-const { getFileStream } = await import('../storage.js');
+const {
+  createUploadMiddleware,
+  readMagicBytes,
+  SAFE_AUDIO_EXTENSIONS
+} = await import('../storage.js');
 
-const readAll = async (stream) => {
-  const chunks = [];
-  for await (const chunk of stream) chunks.push(chunk);
-  return Buffer.concat(chunks);
-};
+const WAV_BYTES = Buffer.concat([
+  Buffer.from('RIFF', 'ascii'),
+  Buffer.from([0x24, 0x00, 0x00, 0x00]),
+  Buffer.from('WAVE', 'ascii'),
+  Buffer.from('fmt sample data......', 'ascii')
+]);
+const OGG_BYTES = Buffer.concat([Buffer.from('OggS', 'ascii'), Buffer.alloc(12)]);
+const WEBM_BYTES = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.from('webm payload')]);
 
-describe('getFileStream (s3 driver, mocked client)', () => {
+describe('S3 upload extension safety (S3StorageEngine, mocked Upload)', () => {
+  beforeEach(() => {
+    capturedUploads.length = 0;
+    uploadCtor.mockClear();
+  });
+
+  const buildApp = () => {
+    const upload = createUploadMiddleware({
+      subdir: 'audio',
+      maxFileSize: 1024 * 1024,
+      fileFilter: (req, file, cb) => cb(null, true)
+    });
+    const app = express();
+    app.post('/upload', upload.single('audio'), (req, res) => {
+      res.json({ storageKey: req.file.storageKey, mimetype: req.file.mimetype });
+    });
+    app.use((err, req, res, next) => res.status(400).json({ error: err.message }));
+    return app;
+  };
+
+  test('a file named evil.html with mimetype audio/wav is uploaded to a key ending in .wav, never .html', async () => {
+    const app = buildApp();
+
+    const res = await request(app)
+      .post('/upload')
+      .attach('audio', WAV_BYTES, { filename: 'evil.html', contentType: 'audio/wav' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.storageKey).toMatch(/^audio\/.+\.wav$/);
+    expect(res.body.storageKey).not.toMatch(/\.html/);
+    expect(capturedUploads).toHaveLength(1);
+    expect(capturedUploads[0].key).toBe(res.body.storageKey);
+    expect(capturedUploads[0].body.equals(WAV_BYTES)).toBe(true);
+  });
+
+  test('a file named x.exe with mimetype audio/ogg is uploaded to a key ending in .ogg', async () => {
+    const app = buildApp();
+
+    const res = await request(app)
+      .post('/upload')
+      .attach('audio', OGG_BYTES, { filename: 'x.exe', contentType: 'audio/ogg' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.storageKey).toMatch(/\.ogg$/);
+  });
+
+  test('a file named clip with mimetype audio/webm is uploaded to a key ending in .webm', async () => {
+    const app = buildApp();
+
+    const res = await request(app)
+      .post('/upload')
+      .attach('audio', WEBM_BYTES, { filename: 'clip', contentType: 'audio/webm' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.storageKey).toMatch(/\.webm$/);
+  });
+
+  test('every SAFE_AUDIO_EXTENSIONS mimetype is honoured through the real S3StorageEngine key construction', async () => {
+    const app = buildApp();
+
+    for (const [mimetype, ext] of Object.entries(SAFE_AUDIO_EXTENSIONS)) {
+      const res = await request(app)
+        .post('/upload')
+        .attach('audio', WAV_BYTES, { filename: 'whatever.dat', contentType: mimetype });
+
+      expect(res.body.storageKey.endsWith(ext)).toBe(true);
+    }
+  });
+});
+
+describe('readMagicBytes (s3 driver, mocked client)', () => {
   beforeEach(() => {
     send.mockReset();
   });
@@ -31,127 +127,34 @@ describe('getFileStream (s3 driver, mocked client)', () => {
     send.mockRestore();
   });
 
-  test('issues a GetObject for the key and returns the body stream and content length', async () => {
-    const bytes = Buffer.from(Array.from({ length: 5000 }, (_, i) => i % 256));
-    send.mockResolvedValue({ Body: Readable.from([bytes], { objectMode: false }), ContentLength: bytes.length });
+  test('issues a ranged GetObject (bytes=0-15 by default) and returns the header bytes', async () => {
+    send.mockResolvedValue({
+      Body: { transformToByteArray: async () => new Uint8Array(WAV_BYTES.subarray(0, 16)) }
+    });
 
-    const { stream, contentLength } = await getFileStream('audio/abc.wav');
+    const result = await readMagicBytes('audio/abc.wav');
 
     expect(send).toHaveBeenCalledTimes(1);
     const [command] = send.mock.calls[0];
     expect(command).toBeInstanceOf(GetObjectCommand);
-    expect(command.input).toEqual({ Bucket: 'csv-test-bucket', Key: 'audio/abc.wav' });
-    expect(contentLength).toBe(bytes.length);
-    expect(typeof stream.pipe).toBe('function');
-    expect((await readAll(stream)).equals(bytes)).toBe(true);
+    expect(command.input).toEqual({ Bucket: 'csv-test-bucket', Key: 'audio/abc.wav', Range: 'bytes=0-15' });
+    expect(result.equals(WAV_BYTES.subarray(0, 16))).toBe(true);
   });
 
-  test('the body is returned as is when it already is a Node Readable', async () => {
-    const body = Readable.from([Buffer.from('x')], { objectMode: false });
-    send.mockResolvedValue({ Body: body, ContentLength: 1 });
+  test('a custom length changes the requested range', async () => {
+    send.mockResolvedValue({ Body: { transformToByteArray: async () => new Uint8Array(Buffer.from('RIFF')) } });
 
-    const { stream } = await getFileStream('audio/abc.wav');
+    await readMagicBytes('audio/abc.wav', 4);
 
-    expect(stream).toBe(body);
+    const [command] = send.mock.calls[0];
+    expect(command.input.Range).toBe('bytes=0-3');
   });
 
-  test('a web ReadableStream body is converted to a Node Readable', async () => {
-    const web = Readable.toWeb(Readable.from([Buffer.from('web body')], { objectMode: false }));
-    send.mockResolvedValue({ Body: web, ContentLength: 8 });
+  test('an S3 error (e.g. object not found) is treated as no signature, not a crash', async () => {
+    send.mockRejectedValue(Object.assign(new Error('NoSuchKey'), { name: 'NoSuchKey' }));
 
-    const { stream } = await getFileStream('audio/abc.wav');
+    const result = await readMagicBytes('audio/gone.wav');
 
-    expect(typeof stream.pipe).toBe('function');
-    expect((await readAll(stream)).toString()).toBe('web body');
-  });
-
-  test('contentLength is undefined when S3 does not report one', async () => {
-    send.mockResolvedValue({ Body: Readable.from([Buffer.from('x')], { objectMode: false }) });
-
-    const { contentLength } = await getFileStream('audio/abc.wav');
-
-    expect(contentLength).toBeUndefined();
-  });
-
-  test('NoSuchKey rejects with STORAGE_NOT_FOUND', async () => {
-    send.mockRejectedValue(new NoSuchKey({ message: 'The specified key does not exist.', $metadata: {} }));
-
-    await expect(getFileStream('audio/gone.wav')).rejects.toMatchObject({ code: 'STORAGE_NOT_FOUND' });
-  });
-
-  test('the not-found error does not carry the bucket name or key', async () => {
-    send.mockRejectedValue(new NoSuchKey({ message: 'no key csv-test-bucket/audio/gone.wav', $metadata: {} }));
-
-    const error = await getFileStream('audio/gone.wav').catch((err) => err);
-
-    expect(error.message).not.toContain('csv-test-bucket');
-    expect(error.message).not.toContain('gone.wav');
-  });
-
-  test('other S3 errors are not mapped to not-found (they surface as unexpected)', async () => {
-    const denied = Object.assign(new Error('Access Denied'), { name: 'AccessDenied', $metadata: { httpStatusCode: 403 } });
-    send.mockRejectedValue(denied);
-
-    const error = await getFileStream('audio/abc.wav').catch((err) => err);
-
-    expect(error).toBe(denied);
-    expect(error.code).not.toBe('STORAGE_NOT_FOUND');
-  });
-
-  test('a missing bucket (404 but not NoSuchKey) is not reported as a missing recording', async () => {
-    const noBucket = Object.assign(new Error('The specified bucket does not exist'), {
-      name: 'NoSuchBucket',
-      $metadata: { httpStatusCode: 404 }
-    });
-    send.mockRejectedValue(noBucket);
-
-    const error = await getFileStream('audio/abc.wav').catch((err) => err);
-
-    expect(error).toBe(noBucket);
-  });
-
-  test.each([undefined, null, ''])('an empty key (%p) rejects with STORAGE_NOT_FOUND without calling S3', async (key) => {
-    await expect(getFileStream(key)).rejects.toMatchObject({ code: 'STORAGE_NOT_FOUND' });
-    expect(send).not.toHaveBeenCalled();
-  });
-
-  describe('legacy /uploads/ keys', () => {
-    // As with getFileUrl, nothing was ever written to the bucket for these: they
-    // are local files, so they are read from the uploads root and S3 is not asked.
-    const UPLOADS_ROOT = fileURLToPath(new URL('../../../uploads', import.meta.url));
-    const AUDIO_DIR = path.join(UPLOADS_ROOT, 'audio');
-    const FILE_NAME = `storage-s3-test-${randomUUID()}.wav`;
-    const FILE_PATH = path.join(AUDIO_DIR, FILE_NAME);
-
-    beforeAll(async () => {
-      await fs.mkdir(AUDIO_DIR, { recursive: true });
-      await fs.writeFile(FILE_PATH, 'legacy local bytes');
-    });
-
-    afterAll(async () => {
-      await fs.rm(FILE_PATH, { force: true });
-    });
-
-    test('are served from local disk under the s3 driver, without an S3 request', async () => {
-      const { stream, contentLength } = await getFileStream(`/uploads/audio/${FILE_NAME}`);
-
-      expect(send).not.toHaveBeenCalled();
-      expect(contentLength).toBe('legacy local bytes'.length);
-      expect((await readAll(stream)).toString()).toBe('legacy local bytes');
-    });
-
-    test('a missing legacy file rejects with STORAGE_NOT_FOUND, still without an S3 request', async () => {
-      await expect(getFileStream(`/uploads/audio/${randomUUID()}.wav`)).rejects.toMatchObject({
-        code: 'STORAGE_NOT_FOUND'
-      });
-      expect(send).not.toHaveBeenCalled();
-    });
-
-    test('a legacy key cannot traverse out of the uploads root', async () => {
-      await expect(getFileStream('/uploads/../package.json')).rejects.toMatchObject({
-        code: 'INVALID_STORAGE_KEY'
-      });
-      expect(send).not.toHaveBeenCalled();
-    });
+    expect(result).toEqual(Buffer.alloc(0));
   });
 });

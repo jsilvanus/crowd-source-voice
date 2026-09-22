@@ -16,6 +16,32 @@ const UPLOADS_ROOT = path.join(__dirname, '../../uploads');
 const DRIVER = process.env.STORAGE_DRIVER === 's3' ? 's3' : 'local';
 const SIGNED_URL_TTL_SECONDS = 15 * 60;
 
+// The ONLY source of truth for what extension a stored audio file gets.
+// Client-controlled input (file.originalname, and therefore path.extname of
+// it) must never influence the stored key or extension: a forged
+// Content-Type/extension pairing (e.g. an HTML file named "x.wav", or named
+// "x.html" with a forged audio Content-Type) must not be able to make it to
+// disk/S3 with a browser-executable extension. The extension is derived only
+// from the file's (fileFilter-verified) mimetype.
+export const SAFE_AUDIO_EXTENSIONS = {
+  'audio/wav': '.wav',
+  'audio/wave': '.wav',
+  'audio/x-wav': '.wav',
+  'audio/webm': '.webm',
+  'audio/ogg': '.ogg'
+};
+
+/**
+ * Maps a multer file's (already fileFilter-verified) mimetype to a safe,
+ * fixed extension. Never derived from file.originalname. The '.bin' fallback
+ * is defensive only — every caller in this codebase runs behind a fileFilter
+ * that already restricts mimetype to a SAFE_AUDIO_EXTENSIONS key, so it
+ * should never actually be hit for audio uploads.
+ */
+export function safeAudioExtension(file) {
+  return SAFE_AUDIO_EXTENSIONS[file.mimetype] || '.bin';
+}
+
 let s3Client;
 function getS3Client() {
   if (!s3Client) {
@@ -52,7 +78,7 @@ class S3StorageEngine {
   }
 
   _handleFile(req, file, cb) {
-    const ext = path.extname(file.originalname) || '';
+    const ext = safeAudioExtension(file);
     const key = `${this.subdir}/${uuidv4()}${ext}`;
 
     const upload = new Upload({
@@ -96,7 +122,7 @@ export function createUploadMiddleware({ subdir, maxFileSize, fileFilter }) {
       cb(null, uploadDir);
     },
     filename: (req, file, cb) => {
-      const ext = path.extname(file.originalname) || '';
+      const ext = safeAudioExtension(file);
       const filename = `${uuidv4()}${ext}`;
       cb(null, filename);
     }
@@ -251,6 +277,69 @@ export async function getFileStream(storageKey) {
 }
 
 /**
+ * Reads just the first `length` bytes of a stored file — enough to check a
+ * magic-byte signature without buffering or re-reading the whole upload.
+ * Local: opens the file and reads a slice. S3: a ranged GetObject
+ * (Range: bytes=0-<length-1>). Returns a Buffer that may be shorter than
+ * `length` (never throws) when the stored file itself is smaller.
+ */
+export async function readMagicBytes(storageKey, length = 16) {
+  if (DRIVER === 's3') {
+    try {
+      const response = await getS3Client().send(
+        new GetObjectCommand({ Bucket: getBucket(), Key: storageKey, Range: `bytes=0-${length - 1}` })
+      );
+      return Buffer.from(await response.Body.transformToByteArray());
+    } catch {
+      // A store that ignores Range (or a zero-byte object) leaves us unable
+      // to confirm a signature — treat that the same as "no valid signature".
+      return Buffer.alloc(0);
+    }
+  }
+
+  const handle = await fs.open(path.join(UPLOADS_ROOT, storageKey), 'r');
+  try {
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+const WAV_MIME_TYPES = new Set(['audio/wav', 'audio/wave', 'audio/x-wav']);
+
+/**
+ * Checks the first bytes of a file against the magic-byte signature expected
+ * for the declared (fileFilter-verified) mimetype. Never throws, including on
+ * a buffer shorter than the signature it needs to check — that is simply
+ * treated as a mismatch.
+ *   WAV:   'RIFF' at bytes 0-3 and 'WAVE' at bytes 8-11
+ *   OGG:   'OggS' at bytes 0-3
+ *   WebM:  EBML header 0x1A 0x45 0xDF 0xA3 at bytes 0-3
+ */
+export function isValidAudioSignature(mimetype, buffer) {
+  if (!Buffer.isBuffer(buffer)) return false;
+
+  if (WAV_MIME_TYPES.has(mimetype)) {
+    return buffer.length >= 12 &&
+      buffer.toString('ascii', 0, 4) === 'RIFF' &&
+      buffer.toString('ascii', 8, 12) === 'WAVE';
+  }
+
+  if (mimetype === 'audio/ogg') {
+    return buffer.length >= 4 && buffer.toString('ascii', 0, 4) === 'OggS';
+  }
+
+  if (mimetype === 'audio/webm') {
+    return buffer.length >= 4 &&
+      buffer[0] === 0x1a && buffer[1] === 0x45 && buffer[2] === 0xdf && buffer[3] === 0xa3;
+  }
+
+  return false;
+}
+
+/**
  * Returns a URL the client can fetch the file from directly.
  * Local: a relative path served by the express.static /uploads mount.
  * S3: a short-lived presigned GET URL, computed fresh on every call.
@@ -295,6 +384,10 @@ export default {
   deleteStoredFile,
   readStoredFile,
   getFileStream,
+  readMagicBytes,
+  isValidAudioSignature,
+  safeAudioExtension,
+  SAFE_AUDIO_EXTENSIONS,
   getFileUrl,
   attachFileUrl,
   attachFileUrls,

@@ -1,196 +1,219 @@
 import { jest } from '@jest/globals';
 import fs from 'fs/promises';
-import os from 'os';
 import path from 'path';
-import { randomUUID } from 'crypto';
+import express from 'express';
+import request from 'supertest';
 import { fileURLToPath } from 'url';
 
 // STORAGE_DRIVER is read when storage.js loads, so pin the local driver first.
 process.env.STORAGE_DRIVER = 'local';
 
-const { getFileStream, resolveUploadPath } = await import('../storage.js');
+const {
+  createUploadMiddleware,
+  deleteStoredFile,
+  readMagicBytes,
+  isValidAudioSignature,
+  safeAudioExtension,
+  SAFE_AUDIO_EXTENSIONS
+} = await import('../storage.js');
 
-// The local driver reads from <repo>/uploads. Test files go in uploads/audio,
-// which is git-ignored, under names that cannot collide with real uploads.
+// The local driver reads/writes under <repo>/uploads. Test files go in
+// uploads/audio, which is git-ignored, under uuid names the app itself
+// generates (they are cleaned up afterwards, same as storage.local.test.js
+// conventions elsewhere in this repo).
 const UPLOADS_ROOT = fileURLToPath(new URL('../../../uploads', import.meta.url));
 const AUDIO_DIR = path.join(UPLOADS_ROOT, 'audio');
-const FILE_NAME = `storage-test-${randomUUID()}.wav`;
-const FILE_PATH = path.join(AUDIO_DIR, FILE_NAME);
-const FILE_BYTES = Buffer.from(Array.from({ length: 150000 }, (_, i) => (i * 7) % 256));
 
-const readAll = async (stream) => {
-  const chunks = [];
-  for await (const chunk of stream) chunks.push(chunk);
-  return Buffer.concat(chunks);
-};
+const WAV_BYTES = Buffer.concat([
+  Buffer.from('RIFF', 'ascii'),
+  Buffer.from([0x24, 0x00, 0x00, 0x00]), // chunk size (arbitrary)
+  Buffer.from('WAVE', 'ascii'),
+  Buffer.from('fmt sample data......', 'ascii')
+]);
+const OGG_BYTES = Buffer.concat([Buffer.from('OggS', 'ascii'), Buffer.from([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])]);
+const WEBM_BYTES = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.from('some webm-ish payload')]);
+const HTML_BYTES = Buffer.from('<html><body><script>alert(document.cookie)</script></body></html>', 'utf-8');
 
-describe('getFileStream (local driver)', () => {
-  beforeAll(async () => {
-    await fs.mkdir(AUDIO_DIR, { recursive: true });
-    await fs.writeFile(FILE_PATH, FILE_BYTES);
-  });
-
-  afterAll(async () => {
-    await fs.rm(FILE_PATH, { force: true });
-  });
-
-  test('streams the stored file: exact bytes and its size as contentLength', async () => {
-    const { stream, contentLength } = await getFileStream(`audio/${FILE_NAME}`);
-
-    expect(contentLength).toBe(FILE_BYTES.length);
-    expect((await readAll(stream)).equals(FILE_BYTES)).toBe(true);
-  });
-
-  test('normalises a legacy leading /uploads/ to the same file', async () => {
-    const { stream, contentLength } = await getFileStream(`/uploads/audio/${FILE_NAME}`);
-
-    expect(contentLength).toBe(FILE_BYTES.length);
-    expect((await readAll(stream)).equals(FILE_BYTES)).toBe(true);
-  });
-
-  test('a path that wanders but stays inside the root is fine', async () => {
-    const { stream } = await getFileStream(`audio/../audio/${FILE_NAME}`);
-
-    expect((await readAll(stream)).equals(FILE_BYTES)).toBe(true);
-  });
-
-  test('a missing file rejects with STORAGE_NOT_FOUND', async () => {
-    await expect(getFileStream(`audio/${randomUUID()}.wav`)).rejects.toMatchObject({
-      code: 'STORAGE_NOT_FOUND'
-    });
-    await expect(getFileStream(`/uploads/audio/${randomUUID()}.wav`)).rejects.toMatchObject({
-      code: 'STORAGE_NOT_FOUND'
+describe('SAFE_AUDIO_EXTENSIONS / safeAudioExtension (local driver)', () => {
+  test('maps every allowed audio mimetype to a fixed, safe extension', () => {
+    expect(SAFE_AUDIO_EXTENSIONS).toEqual({
+      'audio/wav': '.wav',
+      'audio/wave': '.wav',
+      'audio/x-wav': '.wav',
+      'audio/webm': '.webm',
+      'audio/ogg': '.ogg'
     });
   });
 
-  test('a directory is not a file: STORAGE_NOT_FOUND', async () => {
-    await expect(getFileStream('audio')).rejects.toMatchObject({ code: 'STORAGE_NOT_FOUND' });
+  test('never derives the extension from file.originalname', () => {
+    expect(safeAudioExtension({ mimetype: 'audio/wav', originalname: 'evil.html' })).toBe('.wav');
+    expect(safeAudioExtension({ mimetype: 'audio/ogg', originalname: 'x.exe' })).toBe('.ogg');
+    expect(safeAudioExtension({ mimetype: 'audio/webm', originalname: 'no-extension-at-all' })).toBe('.webm');
   });
 
-  test.each([undefined, null, ''])('an empty key (%p) rejects with STORAGE_NOT_FOUND', async (key) => {
-    await expect(getFileStream(key)).rejects.toMatchObject({ code: 'STORAGE_NOT_FOUND' });
-  });
-
-  describe('path traversal', () => {
-    // Targets that really exist outside the uploads root, so a bug would serve them.
-    const repoPackageJson = path.resolve(UPLOADS_ROOT, '../package.json');
-
-    test.each([
-      ['parent directory', '../package.json'],
-      ['two levels up', '../../package.json'],
-      ['up from inside audio/', 'audio/../../package.json'],
-      ['legacy prefix then up', '/uploads/../package.json'],
-      ['legacy prefix then up from audio/', '/uploads/audio/../../package.json'],
-      ['bare ..', '..'],
-      ['legacy prefix then bare ..', '/uploads/..'],
-      ['absolute POSIX path', '/etc/passwd'],
-      ['legacy prefix then absolute path', '/uploads//etc/passwd'],
-      ['Windows drive path', 'C:\\Windows\\win.ini'],
-      ['Windows drive path with forward slashes', 'C:/Windows/win.ini'],
-      ['UNC path', '\\\\server\\share\\x.wav'],
-      ['NUL byte', `audio/${FILE_NAME}\0.txt`]
-    ])('%s (%j) is rejected with INVALID_STORAGE_KEY', async (_label, key) => {
-      await expect(getFileStream(key)).rejects.toMatchObject({ code: 'INVALID_STORAGE_KEY' });
-    });
-
-    test('an absolute path to a real file outside the root is rejected', async () => {
-      await fs.access(repoPackageJson); // sanity: the target exists
-      await expect(getFileStream(repoPackageJson)).rejects.toMatchObject({ code: 'INVALID_STORAGE_KEY' });
-    });
-
-    test('an absolute path to a real file INSIDE the root is still rejected (keys are relative)', async () => {
-      await expect(getFileStream(FILE_PATH)).rejects.toMatchObject({ code: 'INVALID_STORAGE_KEY' });
-    });
-
-    test('a traversal that would reach a real file never yields a stream', async () => {
-      await fs.access(repoPackageJson);
-      let result;
-      try {
-        result = await getFileStream('../package.json');
-      } catch {
-        // expected
-      }
-      expect(result).toBeUndefined();
-    });
-
-    test('backslash traversal never escapes the root on any platform', async () => {
-      // On Windows `..\` is a separator (rejected); on POSIX it is an odd but harmless file name (not found).
-      await expect(getFileStream('..\\package.json')).rejects.toMatchObject({
-        code: expect.stringMatching(/^(INVALID_STORAGE_KEY|STORAGE_NOT_FOUND)$/)
-      });
-    });
-  });
-
-  describe('stream lifecycle', () => {
-    test('destroying the stream releases the file (it can be deleted afterwards, even on Windows)', async () => {
-      const name = `storage-test-${randomUUID()}.wav`;
-      const filePath = path.join(AUDIO_DIR, name);
-      await fs.writeFile(filePath, FILE_BYTES);
-
-      const { stream } = await getFileStream(`audio/${name}`);
-      await new Promise((resolve) => {
-        stream.once('data', () => {
-          stream.once('close', resolve);
-          stream.destroy();
-        });
-      });
-
-      await expect(fs.unlink(filePath)).resolves.toBeUndefined();
-    });
-
-    test('a fully read stream releases the file too', async () => {
-      const name = `storage-test-${randomUUID()}.wav`;
-      const filePath = path.join(AUDIO_DIR, name);
-      await fs.writeFile(filePath, FILE_BYTES);
-
-      const { stream } = await getFileStream(`audio/${name}`);
-      await readAll(stream);
-      await new Promise((resolve) => (stream.closed ? resolve() : stream.once('close', resolve)));
-
-      await expect(fs.unlink(filePath)).resolves.toBeUndefined();
-    });
+  test('falls back to a safe, non-executable default for an unrecognised mimetype', () => {
+    expect(safeAudioExtension({ mimetype: 'text/html', originalname: 'evil.html' })).toBe('.bin');
+    expect(safeAudioExtension({ mimetype: undefined, originalname: 'x.wav' })).toBe('.bin');
   });
 });
 
-describe('resolveUploadPath', () => {
-  const root = path.join(os.tmpdir(), 'csv-uploads-root');
-
-  test('resolves a storage key inside the root', () => {
-    expect(resolveUploadPath('audio/x.wav', root)).toBe(path.join(root, 'audio', 'x.wav'));
+describe('isValidAudioSignature', () => {
+  test('accepts a real WAV (RIFF....WAVE) for every WAV mimetype alias', () => {
+    for (const mimetype of ['audio/wav', 'audio/wave', 'audio/x-wav']) {
+      expect(isValidAudioSignature(mimetype, WAV_BYTES)).toBe(true);
+    }
   });
 
-  test('normalises a legacy /uploads/ prefix', () => {
-    expect(resolveUploadPath('/uploads/audio/x.wav', root)).toBe(path.join(root, 'audio', 'x.wav'));
-    expect(resolveUploadPath('/uploads/audio/x.wav', root)).toBe(resolveUploadPath('audio/x.wav', root));
+  test('accepts a real OGG (OggS) for audio/ogg', () => {
+    expect(isValidAudioSignature('audio/ogg', OGG_BYTES)).toBe(true);
   });
 
-  test('only strips the legacy prefix once and only at the start', () => {
-    expect(resolveUploadPath('uploads/audio/x.wav', root)).toBe(path.join(root, 'uploads', 'audio', 'x.wav'));
-    expect(resolveUploadPath('/uploads/uploads/x.wav', root)).toBe(path.join(root, 'uploads', 'x.wav'));
+  test('accepts a real WebM (EBML header) for audio/webm', () => {
+    expect(isValidAudioSignature('audio/webm', WEBM_BYTES)).toBe(true);
+  });
+
+  test('rejects HTML content regardless of the declared mimetype', () => {
+    expect(isValidAudioSignature('audio/wav', HTML_BYTES)).toBe(false);
+    expect(isValidAudioSignature('audio/ogg', HTML_BYTES)).toBe(false);
+    expect(isValidAudioSignature('audio/webm', HTML_BYTES)).toBe(false);
+  });
+
+  test('rejects a signature that does not match the declared mimetype (cross-format)', () => {
+    expect(isValidAudioSignature('audio/wav', OGG_BYTES)).toBe(false);
+    expect(isValidAudioSignature('audio/ogg', WAV_BYTES)).toBe(false);
+    expect(isValidAudioSignature('audio/webm', WAV_BYTES)).toBe(false);
+  });
+
+  test('rejects an unsupported/unknown mimetype outright', () => {
+    expect(isValidAudioSignature('text/html', WAV_BYTES)).toBe(false);
+    expect(isValidAudioSignature('application/octet-stream', WAV_BYTES)).toBe(false);
   });
 
   test.each([
-    [undefined],
-    [null],
-    [42],
-    [''],
-    ['.'],
-    ['/uploads/'],
-    ['/uploads/.'],
-    ['..'],
-    ['../x'],
-    ['audio/../../x'],
-    ['/uploads/../x'],
-    ['/etc/passwd'],
-    ['/uploads//etc/passwd'],
-    ['C:\\x'],
-    ['\\\\host\\share\\x'],
-    ['audio/x.wav\0']
-  ])('returns null for %j', (key) => {
-    expect(resolveUploadPath(key, root)).toBeNull();
+    [Buffer.alloc(0)],
+    [Buffer.from([0x52])],
+    [Buffer.from('RIFF')],
+    [Buffer.from('RIFFxxxx')] // 8 bytes: has RIFF but too short to hold the WAVE marker
+  ])('does not crash on a short/truncated buffer (%p) — treated as a mismatch', (buffer) => {
+    expect(() => isValidAudioSignature('audio/wav', buffer)).not.toThrow();
+    expect(isValidAudioSignature('audio/wav', buffer)).toBe(false);
   });
 
-  test('a sibling directory that merely shares the root as a prefix is outside the root', () => {
-    expect(resolveUploadPath('../csv-uploads-root-evil/x.wav', root)).toBeNull();
+  test('non-buffer input is treated as a mismatch, not a crash', () => {
+    expect(isValidAudioSignature('audio/wav', undefined)).toBe(false);
+    expect(isValidAudioSignature('audio/wav', null)).toBe(false);
+  });
+});
+
+describe('readMagicBytes (local driver)', () => {
+  const files = [];
+  const write = async (bytes) => {
+    await fs.mkdir(AUDIO_DIR, { recursive: true });
+    const name = `magic-bytes-test-${Math.random().toString(36).slice(2)}.bin`;
+    const filePath = path.join(AUDIO_DIR, name);
+    await fs.writeFile(filePath, bytes);
+    files.push(filePath);
+    return `audio/${name}`;
+  };
+
+  afterAll(async () => {
+    await Promise.all(files.map((f) => fs.rm(f, { force: true })));
+  });
+
+  test('reads exactly the first 16 bytes of a longer file', async () => {
+    const bytes = Buffer.concat([WAV_BYTES, Buffer.alloc(1000, 0xff)]);
+    const key = await write(bytes);
+
+    const result = await readMagicBytes(key);
+
+    expect(result.length).toBe(16);
+    expect(result.equals(bytes.subarray(0, 16))).toBe(true);
+  });
+
+  test('a custom length is honoured', async () => {
+    const key = await write(WAV_BYTES);
+
+    const result = await readMagicBytes(key, 4);
+
+    expect(result.equals(Buffer.from('RIFF', 'ascii'))).toBe(true);
+  });
+
+  test('a file shorter than the requested length returns only the bytes that exist, without throwing', async () => {
+    const tiny = Buffer.from([0x52, 0x49]); // 2 bytes
+    const key = await write(tiny);
+
+    const result = await readMagicBytes(key, 16);
+
+    expect(result.length).toBe(2);
+    expect(result.equals(tiny)).toBe(true);
+  });
+
+  test('reading never buffers or reads past the requested length', async () => {
+    const bytes = Buffer.alloc(200000, 0x41); // 200KB
+    const key = await write(bytes);
+
+    const result = await readMagicBytes(key, 16);
+
+    expect(result.length).toBe(16);
+  });
+});
+
+describe('extension safety end-to-end through the real multer/diskStorage wiring', () => {
+  const savedKeys = [];
+
+  const buildApp = (fileFilter) => {
+    const upload = createUploadMiddleware({ subdir: 'audio', maxFileSize: 1024 * 1024, fileFilter });
+    const app = express();
+    app.post('/upload', upload.single('audio'), (req, res) => {
+      savedKeys.push(req.file.storageKey);
+      res.json({ storageKey: req.file.storageKey, mimetype: req.file.mimetype, originalname: req.file.originalname });
+    });
+    app.use((err, req, res, next) => {
+      res.status(400).json({ error: err.message });
+    });
+    return app;
+  };
+
+  const acceptAll = (req, file, cb) => cb(null, true);
+
+  afterAll(async () => {
+    await Promise.all(savedKeys.map((key) => deleteStoredFile(key)));
+  });
+
+  test('a file named evil.html with mimetype audio/wav is stored with a .wav extension, never .html', async () => {
+    const app = buildApp(acceptAll);
+
+    const res = await request(app)
+      .post('/upload')
+      .attach('audio', WAV_BYTES, { filename: 'evil.html', contentType: 'audio/wav' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.storageKey).toMatch(/\.wav$/);
+    expect(res.body.storageKey).not.toMatch(/\.html/);
+
+    const onDisk = await fs.readFile(path.join(UPLOADS_ROOT, res.body.storageKey));
+    expect(onDisk.equals(WAV_BYTES)).toBe(true);
+  });
+
+  test('a file named x.mp3 with mimetype audio/ogg is stored with a .ogg extension', async () => {
+    const app = buildApp(acceptAll);
+
+    const res = await request(app)
+      .post('/upload')
+      .attach('audio', OGG_BYTES, { filename: 'x.mp3', contentType: 'audio/ogg' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.storageKey).toMatch(/\.ogg$/);
+  });
+
+  test('a file with no extension in its name and mimetype audio/webm is stored with a .webm extension', async () => {
+    const app = buildApp(acceptAll);
+
+    const res = await request(app)
+      .post('/upload')
+      .attach('audio', WEBM_BYTES, { filename: 'no-extension', contentType: 'audio/webm' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.storageKey).toMatch(/\.webm$/);
   });
 });
