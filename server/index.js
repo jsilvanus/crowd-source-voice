@@ -54,8 +54,13 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve uploaded audio files
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+// Serve uploaded audio files. nosniff stops a browser from executing a
+// stored upload as HTML/JS based on content sniffing if its extension or
+// declared Content-Type is ever wrong (defense in depth alongside the
+// upload-time extension/content checks in utils/storage.js and routes/recording.js).
+app.use('/uploads', express.static(path.join(__dirname, '../uploads'), {
+  setHeaders: (res) => res.setHeader('X-Content-Type-Options', 'nosniff')
+}));
 
 // API Routes
 app.use('/api/auth', authRoutes);
