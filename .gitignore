@@ -43,3 +43,6 @@ coverage/
 
 # Misc
 *.pem
+
+# Server deployment settings (scripts/server-deploy.sh)
+.env.server*

@@ -1,0 +1,46 @@
+# Server deployment behind the host's nginx (scripts/server-deploy.sh).
+# App (API + built client) + bundled PostgreSQL; the app is published on 127.0.0.1 only. Settings and
+# secrets come from .env.server (created by the script, never committed):
+#   docker compose -p crowd-source-voice -f docker-compose.server.yml --env-file .env.server ...
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: crowdsourcer
+      POSTGRES_DB: crowd_source_voice_db
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.server}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crowdsourcer -d crowd_source_voice_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build:
+      context: .
+    image: crowd-source-voice-server:latest
+    restart: unless-stopped
+    env_file:
+      - .env.server
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+      # The password is hex (openssl rand -hex), so it needs no URL encoding. sslmode=disable: the bundled
+      # database has no TLS, and server/db/index.js turns SSL on when NODE_ENV=production.
+      DATABASE_URL: postgresql://crowdsourcer:${POSTGRES_PASSWORD}@db:5432/crowd_source_voice_db?sslmode=disable
+    ports:
+      - "127.0.0.1:${HOST_PORT:-4102}:3001"
+    volumes:
+      # STORAGE_DRIVER=local: recordings and corpus files.
+      - uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db_data:
+  uploads:
